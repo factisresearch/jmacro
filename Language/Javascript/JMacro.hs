@@ -54,6 +54,8 @@ The above is a haskell expression that provides a function that takes an x, and 
 
 Meanwhile, the above lambda is in Javascript, and brings the variable into scope both in javascript and in the enclosed antiquotes. The expression is a Javascript function that takes an x, and yields an expression produced by the application of the Haskell function foo as applied to the identifier x (which is of type JExpr -- i.e. a Javascript expression).
 
+Other than that, the language is essentially Javascript (1.5). Note however that one must use semicolons in a principled fashion -- i.e. to end statements consistently. Otherwise, the parser will mistake the whitespace for a whitespace application, and odd things will occur.
+
 Additional datatypes can be marshalled to Javascript by proper instance declarations for the ToJExpr class.
 
 An experimental typechecker is available in the Typed module.
