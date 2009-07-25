@@ -507,9 +507,10 @@ jVar f = UnsatBlock $ do
                addDecls x = x
            return $ addDecls block
 
--- | Create a \"for in\" statement.
+
+-- | Create a for in statement.
 -- Usage:
--- @jForIn {expression} $ \x -> {block involving x}
+-- @jForIn {expression} $ \x -> {block involving x}@
 jForIn :: ToSat a => JExpr -> (JExpr -> a) -> JStat
 jForIn e f = UnsatBlock $ do
                (block, is) <- toSat_ f []

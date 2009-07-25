@@ -59,7 +59,8 @@ data JType = JTNum
            | JTBool
            | JTRec Int
            | JTFunc [JType] JType
-           | JTList [JType] -- or monolist!
+           | JTList (Maybe Int) (Maybe JType) --can be multityped, monotyped, or neither
+                                              --jtint is an index into a record
            | JTStat
            | JTSat Int
            | BotOf JType
@@ -327,6 +328,15 @@ showType (JTFunc args res) = do
      else return $ "((" ++ intercalate ", " strs ++ ") -> " ++ rest++")"
 showType JTStat = return $ "()"
 
+showType (JTList _ (Just mono)) = do
+  m <- showType mono
+  return $ "[" ++ m ++ "]"
+
+showType (JTList (Just multi) _) = do
+  showType (JTRec multi)
+
+showType (JTList Nothing Nothing) = error "trying to show bad list"
+
 prettyType :: JType -> JMonad String
 prettyType x = showType x -- =<< resC False x
 
@@ -526,7 +536,9 @@ x <=.= y = do
                (JTVar _) -> tyErr1 "Attempt to use null variable as type" y
                _ -> return ()
         else return ()
-    xr =.= y
+    case xr of
+      (JTSat _) -> xr <: y
+      _ -> xr =.= y
 
 (=.=) :: JType -> JType -> JMonad ()
 x =.= y = do
@@ -706,8 +718,16 @@ clone' (JTRec i) = do
   where go (i',v) = do
              v' <- clone' v
              return (i',v')
-clone' x = return x
 
+clone' (JTList mbmulti mbmono) = do
+  mbmulti' <- maybe (return Nothing) (fmap Just . cloneRec) mbmulti
+  mbmono'  <- maybe (return Nothing) (fmap Just . clone') mbmono
+  return $ JTList mbmulti' mbmono'
+         where cloneRec x = do
+                 (JTRec i) <- clone' (JTRec x)
+                 return i
+
+clone' x = return x
 
 substitute :: JType -> JMonadClone JType
 substitute x@(JTVar _) = do
@@ -856,6 +876,14 @@ resC' inApp contra x@(JTSat i) = do
       isAtom _ = False
       --isatom should go deeper into sats
 
+resC' inApp contra (JTList mbmulti mbmono) = do
+  mbmulti' <- maybe (return Nothing) (fmap Just . resRec) mbmulti
+  mbmono'  <- maybe (return Nothing) (fmap Just . (resC' inApp contra)) mbmono
+  return (JTList mbmulti' mbmono')
+         where resRec x = do
+                 (JTRec i) <- resC' inApp contra (JTRec x)
+                 return i
+
 resC' _ _ x = return x
 
 getBot (JTRec _) = return $ JTRec (-1)
@@ -867,6 +895,9 @@ getBot x@(JTVar _) = do
   case rx of
     (JTVar _) -> return $ BotOf rx
     _ -> getBot rx
+getBot x@(JTList mbmulti mbmono) = do
+  mbmono' <- maybe (return Nothing) (\x -> Just <$> getBot x) mbmono
+  return $ JTList (fmap (const (negate 1)) mbmulti) mbmono --only bot of multi if multi, only bot of mono if mono!!!! TODO
 getBot x = return x
 
 simplifyCs :: [JConstr] -> JMonadClone [JConstr]
@@ -972,6 +1003,17 @@ lub (JTRec i) (JTRec i') = do
   putRec i'' $ xlyl ++ xld ++ yld
   return r'
 
+lub (JTList mbmulti mbmono) (JTList mbmulti' mbmono') = do
+  mbmulti'' <- case (mbmulti, mbmulti') of
+                 (Just multi, Just multi') -> do
+                      (JTRec i) <- (JTRec multi) \/ (JTRec multi')
+                      return $ Just i
+                 _ -> return Nothing
+  mbmono'' <- case (mbmono, mbmono') of
+                (Just mono, Just mono') -> Just <$> mono \/ mono'
+                _ -> return Nothing
+  return $ JTList mbmulti'' mbmono''
+
 lub x y
   | x == y = return x
   | otherwise = do
@@ -1049,6 +1091,18 @@ glb (JTRec i) (JTRec i') = do
   putRec i'' =<< go xl
   return r'
            where err2may v = fmap Just v `orElse` return Nothing
+
+glb (JTList mbmulti mbmono) (JTList mbmulti' mbmono') = do
+  mbmulti'' <- case (mbmulti, mbmulti') of
+                 (Just multi, Just multi') -> do
+                      (JTRec i) <- (JTRec multi) /\ (JTRec multi')
+                      return $ Just i
+                 _ -> return Nothing
+  mbmono'' <- case (mbmono, mbmono') of
+                (Just mono, Just mono') -> Just <$> mono /\ mono'
+                _ -> return Nothing
+  return $ JTList mbmulti'' mbmono''
+
 
 glb x y
   | x == y = return x
@@ -1193,6 +1247,39 @@ instance JTypeCheck JExpr where
                             et <- resolveType =<< typecheck e
                             argst <- mapM (resolveType <=< typecheck) args
                             appFun et argst
+    typecheck (IdxExpr e1 e2) = do
+                            e1t <- resolveType =<< typecheck e1
+                            e2t <- resolveType =<< typecheck e2
+                            case e1t of
+                              (JTList _ (Just t)) -> return t
+                              (JTList (Just r) _)  -> case e2 of
+                                        (ValExpr (JStr i)) -> do
+                                          newt <- recLookup (StrI i) (JTRec r)
+                                          case newt of
+                                            Just t -> return t
+                                            Nothing -> tyErr1 ("No property " ++ i ++ " in type") e1t
+                                        (ValExpr (JInt i)) -> do
+                                          newt <- recLookup (StrI $ show i) (JTRec r)
+                                          case newt of
+                                            Just t -> return t
+                                            Nothing -> tyErr1 ("No property " ++ show i ++ " in type") e1t
+                                        _ -> tyErr1 "Cannot index into hash/tuple with runtime expression" e1t
+                              (JTList _ _) -> tyErr1 "List/Hash with no inhabited types" e1t
+                              (JTSat i) -> do
+                                      ns <- newSatAtScope [i]
+                                      mbrec <- case e2 of
+                                         (ValExpr (JStr i)) -> do
+                                            nr@(JTRec i') <- newRec
+                                            putRec i' [(StrI i,ns)]
+                                            return $ Just i'
+                                         (ValExpr (JInt i)) -> do
+                                            nr@(JTRec i') <- newRec
+                                            putRec i' [(StrI $ show i,ns)]
+                                            return $ Just i'
+                                         _ -> return Nothing
+                                      addConstraint i (Sub $ JTList mbrec (Just ns))
+                                      return ns
+                              _ -> tyErr1 "Attempting to index into something of type" e1t
 
 appFun :: JType -> [JType] -> JMonad JType
 appFun(JTFunc args ret) appArgs = do
@@ -1236,6 +1323,11 @@ instance JTypeCheck JVal where
             r@(JTRec i) <- newRec
             putRec i initialrec
             return r
+    typecheck (JList es) = do
+            (JTRec i) <- typecheck $ JHash $ M.fromList (zip (map show [1..]) es)
+            es' <- mapM typecheck es
+            e'' <- (Just <$> glball es') `orElse` return Nothing
+            return $ JTList (Just i) e''
     --List
 
 instance JTypeCheck [JStat] where
