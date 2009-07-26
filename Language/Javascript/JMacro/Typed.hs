@@ -20,6 +20,9 @@ import Text.PrettyPrint.HughesPJ
 import Debug.Trace
 
 
+--Type Parser
+--primitives for arrays, strings
+
 --todo: collect errors
 --pretty types, bump down variable nums
 --infer missing vs. assert missing
@@ -538,7 +541,11 @@ x <=.= y = do
         else return ()
     case xr of
       (JTSat _) -> xr <: y
-      _ -> xr =.= y
+      _ -> do
+        yr <- resolveType y
+        case yr of
+          (JTSat _) -> yr <: xr
+          _ -> xr =.= yr
 
 (=.=) :: JType -> JType -> JMonad ()
 x =.= y = do
@@ -1170,9 +1177,12 @@ instance JTypeCheck JStat where
         _ -> tyErr1 "Attempt to use 'for each in' construct with improper type" et
       inConditional $ typecheck s
     typecheck (ApplStat e args) = typecheck (ApplExpr e args) >> return JTStat
+    typecheck (PostStat s e) = typecheck (PostExpr s e) >> return JTStat
     typecheck BreakStat = return JTStat
     --Switch
     --Unsat $ Anti -- anti can take signature!?
+
+---add special cases in selectors for lists, etc!
 
 typecheckLhs :: JExpr -> JMonad JType
 typecheckLhs (SelExpr e1 ident@(StrI s)) = do

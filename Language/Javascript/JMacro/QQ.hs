@@ -15,6 +15,7 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 module Language.Javascript.JMacro.QQ(jmacro,jmacroE) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding ((<|>),many,optional,(<*))
+import Control.Arrow((&&&))
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower)
@@ -31,16 +32,17 @@ import Language.Haskell.TH.Quote
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
 import Text.ParserCombinators.Parsec.Error
+import Text.ParserCombinators.Parsec.Pos
 import qualified Text.ParserCombinators.Parsec.Token as P
 import Text.ParserCombinators.Parsec.Language(javaStyle)
 
--- import Text.Regex.PCRE.Light (compileM)
+import Text.Regex.PCRE.Light (compileM)
 
 import Language.Javascript.JMacro.Base
 
 -- import Debug.Trace
 
-compileM _ _ = Right "hack"
+--compileM _ _ = Right "hack"
 
 {--------------------------------------------------------------------
   QuasiQuotation
@@ -60,13 +62,11 @@ quoteJMPat s = case parseJM s of
                Left err -> fail (show err)
 
 quoteJMExp :: String -> TH.ExpQ
-quoteJMExp s = case parseJM s of
+quoteJMExp s = do
+    (f,p) <- (TH.loc_filename &&& TH.loc_start) <$> TH.location
+    case parseJMPos s f p of
                Right x -> jm2th x
-               Left err -> do
-                   (line,_) <- TH.loc_start <$> TH.location
-                   let pos = errorPos err
-                   let newPos = setSourceLine pos $ line + sourceLine pos - 1
-                   fail (show $ setErrorPos newPos err)
+               Left err -> fail (show err)
 
 quoteJMPatE :: String -> TH.PatQ
 quoteJMPatE s = case parseJME s of
@@ -74,14 +74,11 @@ quoteJMPatE s = case parseJME s of
                Left err -> fail (show err)
 
 quoteJMExpE :: String -> TH.ExpQ
-quoteJMExpE s = case parseJME s of
+quoteJMExpE s = do
+    (f,p) <- (TH.loc_filename &&& TH.loc_start) <$> TH.location
+    case parseJMEPos s f p of
                Right x -> jm2th x
-               Left err -> do
-                   (line,_) <- TH.loc_start <$> TH.location
-                   let pos = errorPos err
-                   let newPos = setSourceLine pos $ line + sourceLine pos - 1
-                   fail (show $ setErrorPos newPos err)
-
+               Left err -> fail (show err)
 
 -- | Traverse a syntax tree, replace an identifier by an
 -- antiquotation of a free variable.
@@ -175,6 +172,7 @@ commaSep, commaSep1 :: JMParser a -> JMParser [a]
 
 lexer = P.makeTokenParser jsLang
 
+
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun"],
@@ -210,6 +208,14 @@ x <* y = do
   y
   return xr
 
+parseJMPos :: String -> String -> (Int, Int) -> Either ParseError JStat
+parseJMPos s f (p1,p2) = BlockStat <$> runParser jmacroParser () "" s
+    where jmacroParser = do
+            setPosition $ newPos f p1 p2
+            ans <- statblock
+            eof
+            return ans
+
 parseJM :: String -> Either ParseError JStat
 parseJM s = BlockStat <$> runParser jmacroParser () "" s
     where jmacroParser = do
@@ -220,6 +226,14 @@ parseJM s = BlockStat <$> runParser jmacroParser () "" s
 parseJME :: String -> Either ParseError JExpr
 parseJME s = runParser jmacroParserE () "" s
     where jmacroParserE = do
+            ans <- whiteSpace >> expr
+            eof
+            return ans
+
+parseJMEPos :: String -> String -> (Int, Int) -> Either ParseError JExpr
+parseJMEPos s f (p1,p2) = runParser jmacroParserE () "" s
+    where jmacroParserE = do
+            setPosition $ newPos f p1 p2
             ans <- whiteSpace >> expr
             eof
             return ans
