@@ -44,7 +44,7 @@ As is the above.
 
 > renderJs [$jmacroE|foo (x,y)|]]
 
-While the above is an error. (i.e. standard javascript function application cannot seperate the leading parenthesis of the argument from
+While the above is an error. (i.e. standard javascript function application cannot seperate the leading parenthesis of the argument from the function being applied)
 
 > \x -> [$jmacroE|foo `(x)`|]]
 
@@ -54,7 +54,7 @@ The above is a haskell expression that provides a function that takes an x, and 
 
 Meanwhile, the above lambda is in Javascript, and brings the variable into scope both in javascript and in the enclosed antiquotes. The expression is a Javascript function that takes an x, and yields an expression produced by the application of the Haskell function foo as applied to the identifier x (which is of type JExpr -- i.e. a Javascript expression).
 
-Other than that, the language is essentially Javascript (1.5). Note however that one must use semicolons in a principled fashion -- i.e. to end statements consistently. Otherwise, the parser will mistake the whitespace for a whitespace application, and odd things will occur.
+Other than that, the language is essentially Javascript (1.5). Note however that one must use semicolons in a principled fashion -- i.e. to end statements consistently. Otherwise, the parser will mistake the whitespace for a whitespace application, and odd things will occur. A further gotcha exists in regex literals, whicch cannot begin with a space. @x / 5 / 4@ parses as ((x / 5) / 4). However, @x /5 / 4@ will parse as x(/5 /, 4). Such are the perils of operators used as delimeters in the presence of whitespace application.
 
 Additional datatypes can be marshalled to Javascript by proper instance declarations for the ToJExpr class.
 
@@ -64,8 +64,8 @@ An experimental typechecker is available in the Typed module.
 -----------------------------------------------------------------------------
 
 module Language.Javascript.JMacro (
-  module Language.Javascript.JMacro.Base,
   module Language.Javascript.JMacro.QQ
+  module Language.Javascript.JMacro.Base,
  ) where
 
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)

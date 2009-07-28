@@ -467,12 +467,12 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
                 (const (return x))
                 (parseExp x)
 
-    valExpr = ValExpr <$> (num <|> negnum <|> str <|> regex <|> list <|> hash <|> func <|> var) <?> "value"
+    valExpr = ValExpr <$> (num <|> negnum <|> str <|> try regex <|> list <|> hash <|> func <|> var) <?> "value"
         where num = either JInt JDouble <$> try natFloat
               negnum = either (JInt . negate) (JDouble . negate) <$> try (char '-' >> natFloat)
               str   = JStr   <$> (myStringLiteral '"' <|> myStringLiteral '\'')
               regex = do
-                s <- myStringLiteral '/'
+                s <- myRegexLiteral
                 case compileM (BS.pack s) [] of
                   Right _ -> return (JRegEx s)
                   Left err -> fail ("Parse error in regexp: " ++ err)
@@ -487,7 +487,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               statOrEblock  = try (ReturnStat <$> expr `folBy` '}') <|> (l2s <$> statblock)
               propPair = liftM2 (,) myIdent (colon >> expr)
 
---notFolBy a b = a <* notFollowedBy (char b)
+notFolBy a b = a <* notFollowedBy (char b)
 folBy :: JMParser a -> Char -> JMParser a
 folBy a b = a <* (lookAhead (char b) >>= const (return ()))
 args' :: JMParser [JExpr]
@@ -590,6 +590,21 @@ myStringLiteral t = do
     return x
  where myChar = do
          c <- noneOf [t]
+         case c of
+           '\\' -> do
+                  c2 <- anyChar
+                  return [c,c2]
+           '\n' -> return "\\n"
+           _ -> return [c]
+
+myRegexLiteral :: JMParser String
+myRegexLiteral = do
+    char '/' `notFolBy` ' '
+    x <- concat <$> many myChar
+    char '/'
+    return x
+ where myChar = do
+         c <- noneOf ['/']
          case c of
            '\\' -> do
                   c2 <- anyChar
