@@ -491,7 +491,7 @@ notFolBy a b = a <* notFollowedBy (char b)
 folBy :: JMParser a -> Char -> JMParser a
 folBy a b = a <* (lookAhead (char b) >>= const (return ()))
 args' :: JMParser [JExpr]
-args' = parens $ commaSep expr
+args' = parens' $ commaSep expr
 
 --Parsers without Lexeme
 
