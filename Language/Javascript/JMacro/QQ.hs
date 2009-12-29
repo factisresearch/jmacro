@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TemplateHaskell, QuasiQuotes #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, TemplateHaskell, QuasiQuotes #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -12,13 +12,12 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 -}
 -----------------------------------------------------------------------------
 
-module Language.Javascript.JMacro.QQ(jmacro,jmacroE) where
+module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding ((<|>),many,optional,(<*))
-import Control.Arrow((&&&))
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Char8 as BS
-import Data.Char(digitToInt, toLower)
+import Data.Char(digitToInt, toLower, isUpper)
 import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
 import qualified Data.Map as M
@@ -32,7 +31,6 @@ import Language.Haskell.TH.Quote
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
 import Text.ParserCombinators.Parsec.Error
-import Text.ParserCombinators.Parsec.Pos
 import qualified Text.ParserCombinators.Parsec.Token as P
 import Text.ParserCombinators.Parsec.Language(javaStyle)
 
@@ -41,8 +39,6 @@ import Text.Regex.PCRE.Light (compileM)
 import Language.Javascript.JMacro.Base
 
 -- import Debug.Trace
-
---compileM _ _ = Right "hack"
 
 {--------------------------------------------------------------------
   QuasiQuotation
@@ -62,11 +58,13 @@ quoteJMPat s = case parseJM s of
                Left err -> fail (show err)
 
 quoteJMExp :: String -> TH.ExpQ
-quoteJMExp s = do
-    (f,p) <- (TH.loc_filename &&& TH.loc_start) <$> TH.location
-    case parseJMPos s f p of
+quoteJMExp s = case parseJM s of
                Right x -> jm2th x
-               Left err -> fail (show err)
+               Left err -> do
+                   (line,_) <- TH.loc_start <$> TH.location
+                   let pos = errorPos err
+                   let newPos = setSourceLine pos $ line + sourceLine pos - 1
+                   fail (show $ setErrorPos newPos err)
 
 quoteJMPatE :: String -> TH.PatQ
 quoteJMPatE s = case parseJME s of
@@ -74,11 +72,14 @@ quoteJMPatE s = case parseJME s of
                Left err -> fail (show err)
 
 quoteJMExpE :: String -> TH.ExpQ
-quoteJMExpE s = do
-    (f,p) <- (TH.loc_filename &&& TH.loc_start) <$> TH.location
-    case parseJMEPos s f p of
+quoteJMExpE s = case parseJME s of
                Right x -> jm2th x
-               Left err -> fail (show err)
+               Left err -> do
+                   (line,_) <- TH.loc_start <$> TH.location
+                   let pos = errorPos err
+                   let newPos = setSourceLine pos $ line + sourceLine pos - 1
+                   fail (show $ setErrorPos newPos err)
+
 
 -- | Traverse a syntax tree, replace an identifier by an
 -- antiquotation of a free variable.
@@ -101,6 +102,7 @@ jm2th v = dataToExpQ (const Nothing
                       `extQ` handleStat
                       `extQ` handleExpr
                       `extQ` handleVal
+                      `extQ` handleStr
                      ) v
 
     where handleStat :: JStat -> Maybe (TH.ExpQ)
@@ -109,16 +111,29 @@ jm2th v = dataToExpQ (const Nothing
                                       TH.listE (blocks ss)
               where blocks :: [JStat] -> [TH.ExpQ]
                     blocks [] = []
-
                     blocks (DeclStat (StrI i):xs) = case i of
-                     ('!':i') -> jm2th (DeclStat (StrI i')) : blocks xs
+                     ('!':'!':i') -> jm2th (DeclStat (StrI i')) : blocks xs
+                     ('!':i') ->
+                        [TH.appE (TH.lamE [TH.varP . mkName . fixIdent $ i'] $
+                                 appConstr "BlockStat"
+                                 (TH.listE . (ds:) . blocks $ xs)) (TH.appE (TH.varE $ mkName "jsv")
+                                                                            (TH.litE $ TH.StringL i'))]
+                        where ds = TH.appE (TH.conE $ mkName "DeclStat")
+                                           (TH.appE (TH.conE $ mkName "StrI")
+                                                  (TH.litE $ TH.StringL i'))
                      _ ->
                         [TH.appE (TH.varE $ mkName "jVar")
-                              (TH.lamE [TH.varP . mkName $ i] $
+                              (TH.lamE [TH.varP . mkName . fixIdent $ i] $
                                  appConstr "BlockStat"
                                  (TH.listE $ blocks $ map (antiIdent i) xs))]
 
                     blocks (x:xs) = jm2th x : blocks xs
+
+
+                    fixIdent css@(c:_)
+                        | isUpper c = '_' : css
+                        | otherwise = css
+                    fixIdent _ = "_"
           handleStat (ForInStat b (StrI i) e s) = Just $
                  appFun (TH.varE $ forFunc)
                         [jm2th e,
@@ -128,6 +143,17 @@ jm2th v = dataToExpQ (const Nothing
               where forFunc
                         | b = mkName "jForEachIn"
                         | otherwise = mkName "jForIn"
+
+          handleStat (TryStat s (StrI i) s1 s2)
+              | s1 == BlockStat [] = Nothing
+              | otherwise = Just $
+                 appFun (TH.varE $ mkName "jTryCatchFinally")
+                        [jm2th s,
+                         TH.lamE [TH.varP $ mkName i]
+                                 (jm2th $ antiIdent i s1),
+                         jm2th s2
+                         ]
+
           handleStat (AntiStat s) = case parseExp s of
                                       Right ans -> Just $ TH.appE (TH.varE (mkName "toStat"))
                                                                   (return ans)
@@ -152,6 +178,9 @@ jm2th v = dataToExpQ (const Nothing
                                 jm2th (M.toList m)
           handleVal _ = Nothing
 
+          handleStr :: String -> Maybe (TH.ExpQ)
+          handleStr x = Just $ TH.litE $ TH.StringL x
+
           appFun x = foldl (TH.appE) x
           appConstr n = TH.appE (TH.conE $ mkName n)
 
@@ -172,11 +201,10 @@ commaSep, commaSep1 :: JMParser a -> JMParser [a]
 
 lexer = P.makeTokenParser jsLang
 
-
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
-           P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun"],
-           P.reservedOpNames = ["--","*","/","+","-",".","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->"],
+           P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally"],
+           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -208,14 +236,6 @@ x <* y = do
   y
   return xr
 
-parseJMPos :: String -> String -> (Int, Int) -> Either ParseError JStat
-parseJMPos s f (p1,p2) = BlockStat <$> runParser jmacroParser () "" s
-    where jmacroParser = do
-            setPosition $ newPos f p1 p2
-            ans <- statblock
-            eof
-            return ans
-
 parseJM :: String -> Either ParseError JStat
 parseJM s = BlockStat <$> runParser jmacroParser () "" s
     where jmacroParser = do
@@ -226,14 +246,6 @@ parseJM s = BlockStat <$> runParser jmacroParser () "" s
 parseJME :: String -> Either ParseError JExpr
 parseJME s = runParser jmacroParserE () "" s
     where jmacroParserE = do
-            ans <- whiteSpace >> expr
-            eof
-            return ans
-
-parseJMEPos :: String -> String -> (Int, Int) -> Either ParseError JExpr
-parseJMEPos s f (p1,p2) = runParser jmacroParserE () "" s
-    where jmacroParserE = do
-            setPosition $ newPos f p1 p2
             ans <- whiteSpace >> expr
             eof
             return ans
@@ -291,6 +303,7 @@ statement = declStat
             <|> forStat
             <|> braces statblock
             <|> assignStat
+            <|> tryStat
             <|> applStat
             <|> breakStat
             <|> antiStat
@@ -315,7 +328,7 @@ statement = declStat
         as <- many identdecl
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
         return $ [DeclStat (addBang n), AssignStat (ValExpr $ JVar n) (ValExpr $ JFunc as b)]
-            where addBang (StrI x) = StrI ('!':x)
+            where addBang (StrI x) = StrI ('!':'!':x)
 
       returnStat =
         reserved "return" >> (:[]) . ReturnStat <$> expr
@@ -345,8 +358,26 @@ statement = declStat
       caseStat =
         reserved "case" >> liftM2 (,) expr (char ':' >> l2s <$> statblock)
 
+      tryStat = do
+        reserved "try"
+        s <- statement
+        isCatch <- (lookAhead (reserved "catch") >> return True)
+                  <|> return False
+        (i,s1) <- if isCatch
+                  then do
+                    reserved "catch"
+                    liftM2 (,) (parens identdecl) statement
+                  else return $ (StrI "", [])
+        isFinally <- (lookAhead (reserved "finally") >> return True)
+                  <|> return False
+        s2 <- if isFinally
+                then reserved "finally" >> statement
+                else return $ []
+        return [TryStat (BlockStat s) i (BlockStat s1) (BlockStat s2)]
+
+
       dfltStat =
-        reserved "default:" >> statblock
+        reserved "default" >> char ':' >> whiteSpace >> statblock
 
       forStat =
         reserved "for" >> ((reserved "each" >> inBlock True)
@@ -426,7 +457,7 @@ expr = do
 
         expr' = buildExpressionParser table dotExpr <?> "expression"
 
-        table = [[iop "*", iop "/"],
+        table = [[iop "*", iop "/", iop "%"],
                  [iop "+", iop "-"],
                  [iope "==", iope "!=", iope "<", iope ">",
                   iope ">=", iope "<=", iope "==="],
@@ -472,7 +503,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               negnum = either (JInt . negate) (JDouble . negate) <$> try (char '-' >> natFloat)
               str   = JStr   <$> (myStringLiteral '"' <|> myStringLiteral '\'')
               regex = do
-                s <- myRegexLiteral
+                s <- myStringLiteralNoBr '/'
                 case compileM (BS.pack s) [] of
                   Right _ -> return (JRegEx s)
                   Left err -> fail ("Parse error in regexp: " ++ err)
@@ -487,8 +518,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               statOrEblock  = try (ReturnStat <$> expr `folBy` '}') <|> (l2s <$> statblock)
               propPair = liftM2 (,) myIdent (colon >> expr)
 
-notFolBy a b = a <* notFollowedBy (char b)
-folBy :: JMParser a -> Char -> JMParser a
+--notFolBy a b = a <* notFollowedBy (char b)
 folBy a b = a <* (lookAhead (char b) >>= const (return ()))
 args' :: JMParser [JExpr]
 args' = parens' $ commaSep expr
@@ -597,17 +627,16 @@ myStringLiteral t = do
            '\n' -> return "\\n"
            _ -> return [c]
 
-myRegexLiteral :: JMParser String
-myRegexLiteral = do
-    char '/' `notFolBy` ' '
+myStringLiteralNoBr :: Char -> JMParser String
+myStringLiteralNoBr t = do
+    char t
     x <- concat <$> many myChar
-    char '/'
+    char t
     return x
  where myChar = do
-         c <- noneOf ['/']
+         c <- noneOf [t,'\n']
          case c of
            '\\' -> do
                   c2 <- anyChar
                   return [c,c2]
-           '\n' -> return "\\n"
            _ -> return [c]

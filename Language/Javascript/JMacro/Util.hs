@@ -8,7 +8,7 @@ import Language.Javascript.JMacro.Base
 (.) :: JExpr -> String -> JExpr
 x . y = SelExpr x (StrI y)
 
-(<>) :: ToJExpr a => JExpr -> a -> JExpr
+(<>) :: (ToJExpr a) => JExpr -> a -> JExpr
 x <> y = IdxExpr x (toJExpr y)
 
 infixl 2 =:
@@ -54,9 +54,6 @@ toJExprList x = case toJExpr x of
                   (ValExpr (JList l)) -> l
                   x' -> [x']
 
-
-jsv :: P.String -> JExpr
-jsv = ValExpr P.. JVar P.. StrI
 
 jstr :: P.String -> JExpr
 jstr = ValExpr P.. JStr

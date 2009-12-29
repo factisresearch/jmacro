@@ -13,15 +13,12 @@ import Data.List (intercalate, deleteFirstsBy, find)
 import Data.Function(on)
 import qualified Data.Map as M
 import Data.Map(Map)
-import Data.Maybe
+import Data.Maybe(fromMaybe)
 import qualified Data.Set as S
 import Data.Set(Set)
 import Text.PrettyPrint.HughesPJ
 import Debug.Trace
 
-
---Type Parser
---primitives for arrays, strings
 
 --todo: collect errors
 --pretty types, bump down variable nums

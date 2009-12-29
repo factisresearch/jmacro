@@ -1,7 +1,7 @@
 name:                jmacro
-version:             0.1.1
+version:             0.2
 synopsis:            QuasiQuotation library for programmatic generation of Javascript code.
-description:         Javascript syntax, functional syntax, hygeinic names, compile-time guarantees of syntactic correctness, limited typechecking.
+description:         Javascript syntax, functional syntax, hygienic names, compile-time guarantees of syntactic correctness, limited typechecking.
 category:            Language
 license:             BSD3
 license-file:        LICENSE
@@ -13,7 +13,7 @@ Cabal-Version:       >= 1.6
 
 
 library
-  build-depends:     base >= 4, base < 5, containers, pretty, safe >= 0.2, parsec >= 2.1, template-haskell >= 2.3, mtl, haskell-src-meta, bytestring >= 0.9
+  build-depends:     base >= 4, base < 5, containers, pretty, safe >= 0.2, parsec >= 2.1, template-haskell >= 2.3, mtl, haskell-src-meta, bytestring >= 0.9, syb, pcre-light
   exposed-modules:   Language.Javascript.JMacro
                      Language.Javascript.JMacro.Util
                      Language.Javascript.JMacro.Typed
@@ -22,6 +22,10 @@ library
   ghc-options:       -Wall
   if impl(ghc >= 6.8)
     ghc-options:     -fwarn-tabs
+
+executable jmacro
+  build-depends: parseargs
+  main-is: Language/Javascript/JMacro/Executable.hs
 
 source-repository head
   type:      darcs

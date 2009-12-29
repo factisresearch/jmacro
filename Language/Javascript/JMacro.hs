@@ -64,8 +64,8 @@ An experimental typechecker is available in the Typed module.
 -----------------------------------------------------------------------------
 
 module Language.Javascript.JMacro (
-  module Language.Javascript.JMacro.QQ
-  module Language.Javascript.JMacro.Base,
+  module Language.Javascript.JMacro.QQ,
+  module Language.Javascript.JMacro.Base
  ) where
 
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)

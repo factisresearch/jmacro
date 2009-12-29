@@ -19,17 +19,19 @@ module Language.Javascript.JMacro.Base (
   JMacro(..), MultiComp(..), Compos(..),
   composOp, composOpM, composOpM_, composOpFold,
   -- * Hygienic transformation
-  withHygiene,
+  withHygiene, scopify,
   -- * Display/Output
   renderJs, JsToDoc(..),
   -- * Ad-hoc data marshalling
   ToJExpr(..),
+  -- * Literals
+  jsv,
   -- * Occasionally helpful combinators
-  jLam, jVar, jFor, jForIn, jForEachIn,
+  jLam, jVar, jFor, jForIn, jForEachIn, jTryCatchFinally,
   expr2stat, ToStat(..), nullStat,
   -- * Hash combinators
   jhEmpty, jhSingle, jhAdd, jhFromList,
-  -- * utility
+  -- * Utility
   jsSaturate
   ) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
@@ -41,6 +43,7 @@ import Control.Monad.State.Strict
 import Safe
 import Control.Monad.Identity
 import Data.Generics
+import Data.Monoid
 
 {--------------------------------------------------------------------
   ADTs
@@ -59,6 +62,7 @@ data JStat = DeclStat   Ident
            | WhileStat  JExpr JStat
            | ForInStat  Bool Ident JExpr JStat
            | SwitchStat JExpr [(JExpr, JStat)] JStat
+           | TryStat    JStat Ident JStat JStat
            | BlockStat  [JStat]
            | ApplStat   JExpr [JExpr]
            | PostStat   String JExpr
@@ -67,6 +71,13 @@ data JStat = DeclStat   Ident
            | AntiStat   String
            | BreakStat
              deriving (Eq, Ord, Show, Data, Typeable)
+
+instance Monoid JStat where
+    mempty = BlockStat []
+    mappend (BlockStat xs) (BlockStat ys) = BlockStat $ xs ++ ys
+    mappend (BlockStat xs) ys = BlockStat $ xs ++ [ys]
+    mappend xs (BlockStat ys) = BlockStat $ xs : ys
+    mappend xs ys = BlockStat [xs,ys]
 
 -- | Expressions
 data JExpr = ValExpr    JVal
@@ -181,6 +192,7 @@ instance Compos MultiComp where
                where l' = mapM' (\(c,s) -> ret (,) `app` f c `app` f s) l
            BlockStat xs -> ret BlockStat `app` mapM' f xs
            ApplStat  e xs -> ret ApplStat `app` f e `app` mapM' f xs
+           TryStat s i s1 s2 -> ret TryStat `app` f s `app` f i `app` f s1 `app` f s2
            PostStat o e -> ret (PostStat o) `app` f e
            AssignStat e e' -> ret AssignStat `app` f e `app` f e'
            UnsatBlock _ -> ret v'
@@ -278,9 +290,9 @@ jsSaturate str x = evalState (jsSaturate_ x) (newIdentSupply str)
 jsSaturate_ :: (JMacro a) => a -> State [Ident] a
 jsSaturate_ e = fromMC <$> go (toMC e)
     where go v = case v of
-                   MStat (UnsatBlock us) -> composOpM go =<< (MStat <$> us)
-                   MExpr (UnsatExpr  us) -> composOpM go =<< (MExpr <$> us)
-                   MVal  (UnsatVal   us) -> composOpM go =<< (MVal  <$> us)
+                   MStat (UnsatBlock us) -> go =<< (MStat <$> us)
+                   MExpr (UnsatExpr  us) -> go =<< (MExpr <$> us)
+                   MVal  (UnsatVal   us) -> go =<< (MVal  <$> us)
                    _ -> composOpM go v
 
 {--------------------------------------------------------------------
@@ -289,7 +301,7 @@ jsSaturate_ e = fromMC <$> go (toMC e)
 
 --doesn't apply to unsaturated bits
 jsReplace_ :: JMacro a => [(Ident, Ident)] -> a -> a
-jsReplace_ xs e = fromMC $ composOp go (toMC e)
+jsReplace_ xs e = fromMC $ go (toMC e)
     where go v = case v of
                    MIdent i -> maybe v MIdent (M.lookup i mp)
                    _ -> composOp go v
@@ -305,7 +317,7 @@ jsUnsat_ xs e = do
 -- | Apply a transformation to a fully saturated syntax tree,
 -- taking care to return any free variables back to their free state
 -- following the transformation. As the transformation preserves
--- free variables, it is hygienic.
+-- free variables, it is hygienic. Cannot be used nested.
 withHygiene:: JMacro a => (a -> a) -> a -> a
 withHygiene f x = fromMC $ case mx of
               MStat _  -> toMC $ UnsatBlock (coerceMC <$> jsUnsat_ is' x'')
@@ -321,10 +333,45 @@ withHygiene f x = fromMC $ case mx of
           coerceMC :: (JMacro a, JMacro b) => a -> b
           coerceMC = fromMC . toMC
 
-{-
-jsReplace :: JMacro a => [(Ident, Ident)] -> a -> a
-jsReplace xs = withHygiene (jsReplace_ xs)
--}
+
+
+
+-- | Takes a fully saturated expression and transforms it to use unique variables that respect scope.
+scopify :: JStat -> JStat
+scopify x = evalState (fromMC <$> go (toMC x)) (newIdentSupply Nothing)
+    where go v = case v of
+                   (MStat (BlockStat ss)) -> MStat . BlockStat <$>
+                                             blocks ss
+                       where blocks [] = return []
+                             blocks (DeclStat (StrI i) : xs) =  case i of
+                                ('!':'!':i') -> (DeclStat (StrI i'):) <$> blocks xs
+                                ('!':i') -> (DeclStat (StrI i'):) <$> blocks xs
+                                _ -> do
+                                  (newI:st) <- get
+                                  put st
+                                  rest <- blocks xs
+                                  return $ [DeclStat newI `mappend` jsReplace_ [(StrI i, newI)] (BlockStat rest)]
+                             blocks (x':xs) = (fromMC <$> go (toMC x')) <:> blocks xs
+                             (<:>) = liftM2 (:)
+                   (MStat (ForInStat b (StrI i) e s)) -> do
+                          (newI:st) <- get
+                          put st
+                          rest <- fromMC <$> go (toMC s)
+                          return $ MStat . ForInStat b newI e $ jsReplace_ [(StrI i, newI)] rest
+                   (MStat (TryStat s (StrI i) s1 s2)) -> do
+                          (newI:st) <- get
+                          put st
+                          t <- fromMC <$> go (toMC s)
+                          c <- fromMC <$> go (toMC s1)
+                          f <- fromMC <$> go (toMC s2)
+                          return . MStat . TryStat t newI (jsReplace_ [(StrI i, newI)] c) $ f
+                   (MExpr (ValExpr (JFunc is s))) -> do
+                            st <- get
+                            let (newIs,newSt) = splitAt (length is) st
+                            put (newSt)
+                            rest <- fromMC <$> go (toMC s)
+                            return . MExpr . ValExpr $ JFunc newIs $ (jsReplace_ $ zip is newIs) rest
+                   _ -> composOpM go v
 
 {--------------------------------------------------------------------
   Pretty Printing
@@ -361,6 +408,11 @@ instance JsToDoc JStat where
               cases = vcat l'
     jsToDoc (ReturnStat e) = text "return" <+> jsToDoc e
     jsToDoc (ApplStat e es) = jsToDoc e <> (parens . fsep . punctuate comma $ map jsToDoc es)
+    jsToDoc (TryStat s i s1 s2) = text "try" $$ braceNest' (jsToDoc s) $$ mbCatch $$ mbFinally
+        where mbCatch | s1 == BlockStat [] = empty
+                      | otherwise = text "catch" <> parens (jsToDoc i) $$ braceNest' (jsToDoc s1)
+              mbFinally | s2 == BlockStat [] = empty
+                        | otherwise = text "finally" $$ braceNest' (jsToDoc s2)
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
     jsToDoc (PostStat op x) = jsToDoc x <> text op
     jsToDoc (AntiStat s) = text $ "`(" ++ s ++ ")`"
@@ -388,7 +440,9 @@ instance JsToDoc JVal where
     jsToDoc (JInt i) = integer i
     jsToDoc (JStr s) = text ("\""++s++"\"")
     jsToDoc (JRegEx s) = text ("/"++s++"/")
-    jsToDoc (JHash m) = braceNest . fsep . punctuate comma . map (\(x,y) -> quotes (text x) <> colon <+> jsToDoc y) $ M.toList m
+    jsToDoc (JHash m)
+            | M.null m = text "{}"
+            | otherwise = braceNest . fsep . punctuate comma . map (\(x,y) -> quotes (text x) <> colon <+> jsToDoc y) $ M.toList m
     jsToDoc (JFunc is b) = parens $ text "function" <> parens (fsep . punctuate comma . map jsToDoc $ is) $$ braceNest' (jsToDoc b)
     jsToDoc (UnsatVal f) = jsToDoc $ sat_ f
 
@@ -523,6 +577,11 @@ jForEachIn :: ToSat a => JExpr -> (JExpr -> a) -> JStat
 jForEachIn e f = UnsatBlock $ do
                (block, is) <- toSat_ f []
                return $ ForInStat True (headNote "jForIn" is) e block
+
+jTryCatchFinally :: (ToSat a) => JStat -> a -> JStat -> JStat
+jTryCatchFinally s f s2 = UnsatBlock $ do
+                     (block, is) <- toSat_ f []
+                     return $ TryStat s (headNote "jTryCatch" is) block s2
 
 jsv :: String -> JExpr
 jsv = ValExpr . JVar . StrI
