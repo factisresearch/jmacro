@@ -14,6 +14,7 @@ Cabal-Version:       >= 1.6
 
 library
   build-depends:     base >= 4, base < 5, containers, pretty, safe >= 0.2, parsec >= 2.1, template-haskell >= 2.3, mtl, haskell-src-meta, bytestring >= 0.9, syb, pcre-light
+
   exposed-modules:   Language.Javascript.JMacro
                      Language.Javascript.JMacro.Util
                      Language.Javascript.JMacro.Typed
@@ -29,4 +30,4 @@ executable jmacro
 
 source-repository head
   type:      darcs
-  location:  http://patch-tag.com/r/jmacro/pullrepo
+  location:  http://patch-tag.com/r/gershomb/jmacro

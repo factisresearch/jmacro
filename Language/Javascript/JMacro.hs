@@ -1,4 +1,3 @@
------------------------------------------------------------------------------
 {- |
 Module      :  Language.Javascript.JMacro
 Copyright   :  (c) Gershom Bazerman, 2009
@@ -61,7 +60,6 @@ Additional datatypes can be marshalled to Javascript by proper instance declarat
 An experimental typechecker is available in the Typed module.
 
 -}
------------------------------------------------------------------------------
 
 module Language.Javascript.JMacro (
   module Language.Javascript.JMacro.QQ,
