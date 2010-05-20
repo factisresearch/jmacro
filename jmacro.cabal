@@ -18,6 +18,7 @@ library
   exposed-modules:   Language.Javascript.JMacro
                      Language.Javascript.JMacro.Util
                      Language.Javascript.JMacro.Typed
+                     Language.Javascript.JMacro.Prelude
   other-modules:     Language.Javascript.JMacro.Base
                      Language.Javascript.JMacro.QQ
   ghc-options:       -Wall

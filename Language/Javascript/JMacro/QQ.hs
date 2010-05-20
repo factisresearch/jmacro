@@ -309,9 +309,11 @@ statement = declStat
             <|> antiStat
           <?> "statement"
     where
-      declStat =
-          reserved "var" >> concat <$> commaSep1 identAssignDecl
-      -- take assignment
+      declStat = do
+        reserved "var"
+        res <- concat <$> commaSep1 identAssignDecl
+        semi
+        return res
 
       functionDecl = do
         reserved "function"
@@ -399,7 +401,7 @@ statement = declStat
         return $ jFor' before after p b
           where threeStat =
                     liftM3 (,,) (statement)
-                                (semi >> expr)
+                                (expr)
                                 (semi >> statement)
                 jFor' :: (ToJExpr a) => [JStat] -> a -> [JStat] -> [JStat] -> [JStat]
                 jFor' before p after bs = before ++ [WhileStat (toJExpr p) b']
