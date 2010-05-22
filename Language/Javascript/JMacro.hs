@@ -1,6 +1,6 @@
 {- |
 Module      :  Language.Javascript.JMacro
-Copyright   :  (c) Gershom Bazerman, 2009
+Copyright   :  (c) Gershom Bazerman, 2010
 License     :  BSD 3 Clause
 Maintainer  :  gershomb@gmail.com
 Stability   :  experimental
@@ -8,6 +8,9 @@ Stability   :  experimental
 Simple DSL for lightweight (untyped) programmatic generation of Javascript.
 
 A number of examples are available in the source of "Language.Javascript.JMacro.Prelude".
+
+Functions to generate generic RPC wrappers (using json serialization) are available in
+"Language.Javascript.JMacro.Rpc".
 
 usage:
 

@@ -1,3 +1,11 @@
+{- |
+Module      :  Language.Javascript.JMacro.Prelude
+Copyright   :  (c) Gershom Bazerman, Jeff Polakow 2010
+License     :  BSD 3 Clause
+Maintainer  :  gershomb@gmail.com
+Stability   :  experimental
+-}
+
 {-# LANGUAGE QuasiQuotes #-}
 
 module Language.Javascript.JMacro.Prelude where
