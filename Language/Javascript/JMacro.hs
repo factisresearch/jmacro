@@ -7,6 +7,8 @@ Stability   :  experimental
 
 Simple DSL for lightweight (untyped) programmatic generation of Javascript.
 
+A number of examples are available in the source of "Language.Javascript.JMacro.Prelude".
+
 usage:
 
 > renderJs [$jmacro|fun id x -> x|]
@@ -57,16 +59,18 @@ Other than that, the language is essentially Javascript (1.5). Note however that
 
 Additional datatypes can be marshalled to Javascript by proper instance declarations for the ToJExpr class.
 
-An experimental typechecker is available in the Typed module.
+An experimental typechecker is available in the "Language.Javascript.JMacro.Typed" module.
 
 -}
 
 module Language.Javascript.JMacro (
   module Language.Javascript.JMacro.QQ,
-  module Language.Javascript.JMacro.Base
+  module Language.Javascript.JMacro.Base,
+  module Language.Javascript.JMacro.Prelude
  ) where
 
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 
 import Language.Javascript.JMacro.Base hiding (expr2stat)
 import Language.Javascript.JMacro.QQ
+import Language.Javascript.JMacro.Prelude
