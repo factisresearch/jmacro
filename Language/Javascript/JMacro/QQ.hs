@@ -22,7 +22,7 @@ import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
 import qualified Data.Map as M
 
-import Language.Haskell.Meta.Parse
+--import Language.Haskell.Meta.Parse
 import qualified Language.Haskell.TH as TH
 import Language.Haskell.TH(mkName)
 import qualified Language.Haskell.TH.Lib as TH
@@ -37,6 +37,7 @@ import Text.ParserCombinators.Parsec.Language(javaStyle)
 import Text.Regex.PCRE.Light (compileM)
 
 import Language.Javascript.JMacro.Base
+import Language.Javascript.JMacro.ParseTH
 
 -- import Debug.Trace
 
@@ -154,14 +155,14 @@ jm2th v = dataToExpQ (const Nothing
                          jm2th s2
                          ]
 
-          handleStat (AntiStat s) = case parseExp s of
+          handleStat (AntiStat s) = case parseHSExp s of
                                       Right ans -> Just $ TH.appE (TH.varE (mkName "toStat"))
                                                                   (return ans)
                                       Left err -> Just $ fail err
           handleStat _ = Nothing
 
           handleExpr :: JExpr -> Maybe (TH.ExpQ)
-          handleExpr (AntiExpr s) = case parseExp s of
+          handleExpr (AntiExpr s) = case parseHSExp s of
                                       Right ans -> Just $ TH.appE (TH.varE (mkName "toJExpr")) (return ans)
                                       Left err -> Just $ fail err
           handleExpr (ValExpr (JFunc is' s)) = Just $
@@ -440,7 +441,7 @@ statement = declStat
         x <- (try (symbol "`(") >> anyChar `manyTill` try (symbol ")`"))
         either (fail . ("Bad AntiQuotation: \n" ++))
                (const (return x))
-               (parseExp x)
+               (parseHSExp x)
 
 --args :: JMParser [JExpr]
 --args = parens $ commaSep expr
@@ -498,7 +499,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
          x <- (try (symbol "`(") >> anyChar `manyTill` try (string ")`"))
          either (fail . ("Bad AntiQuotation: \n" ++))
                 (const (return x))
-                (parseExp x)
+                (parseHSExp x)
 
     valExpr = ValExpr <$> (num <|> negnum <|> str <|> try regex <|> list <|> hash <|> func <|> var) <?> "value"
         where num = either JInt JDouble <$> try natFloat
