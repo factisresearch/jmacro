@@ -18,7 +18,7 @@ import Control.Applicative hiding ((<|>),many,optional,(<*))
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower, isUpper)
-import Data.List(isPrefixOf, sort)
+import Data.List(isPrefixOf, sort, partition)
 import Data.Generics(extQ,Data)
 import qualified Data.Map as M
 
@@ -37,9 +37,10 @@ import Text.ParserCombinators.Parsec.Language(javaStyle)
 import Text.Regex.PCRE.Light (compileM)
 
 import Language.Javascript.JMacro.Base
+import Language.Javascript.JMacro.Types
 import Language.Javascript.JMacro.ParseTH
 
--- import Debug.Trace
+import Debug.Trace
 
 {--------------------------------------------------------------------
   QuasiQuotation
@@ -92,6 +93,8 @@ antiIdent s e = fromMC $ go (toMC e)
              | s == s' = MExpr (AntiExpr s)
           go (MExpr (SelExpr x i)) =
               MExpr (SelExpr (antiIdent s x) i)
+          go (MStat (TypeStat (Right (StrI s')) t))
+             | s == s' = MStat (TypeStat (Left s) t)
           go x = composOp go x
 
 antiIdents :: JMacro a => [String] -> a -> a
@@ -109,7 +112,7 @@ jm2th v = dataToExpQ (const Nothing
     where handleStat :: JStat -> Maybe (TH.ExpQ)
           handleStat (BlockStat ss) = Just $
                                       appConstr "BlockStat" $
-                                      TH.listE (blocks ss)
+                                      TH.listE (blocks $ typesToEnd ss)
               where blocks :: [JStat] -> [TH.ExpQ]
                     blocks [] = []
                     blocks (DeclStat (StrI i):xs) = case i of
@@ -135,6 +138,12 @@ jm2th v = dataToExpQ (const Nothing
                         | isUpper c = '_' : css
                         | otherwise = css
                     fixIdent _ = "_"
+
+                    typesToEnd xs = rest ++ typeSigs
+                        where (typeSigs, rest) = partition isType xs
+                              isType (TypeStat _ _ ) = True
+                              isType _ = False
+
           handleStat (ForInStat b (StrI i) e s) = Just $
                  appFun (TH.varE $ forFunc)
                         [jm2th e,
@@ -159,6 +168,10 @@ jm2th v = dataToExpQ (const Nothing
                                       Right ans -> Just $ TH.appE (TH.varE (mkName "toStat"))
                                                                   (return ans)
                                       Left err -> Just $ fail err
+          handleStat (TypeStat (Left s) t) = Just $ TH.appE
+                          (TH.appE (TH.varE (mkName "jmTypeSigStat")) (TH.varE (mkName s)))
+                          (jm2th t)
+
           handleStat _ = Nothing
 
           handleExpr :: JExpr -> Maybe (TH.ExpQ)
@@ -181,6 +194,14 @@ jm2th v = dataToExpQ (const Nothing
 
           handleStr :: String -> Maybe (TH.ExpQ)
           handleStr x = Just $ TH.litE $ TH.StringL x
+
+          handleTyp :: JType -> Maybe (TH.ExpQ)
+          handleTyp (JTRecord vr mp) = Just $
+                                       TH.appE (TH.appE (TH.varE $ mkName "jtFromList")
+                                                      (jm2th vr))
+                                               (jm2th $ M.toList mp)
+
+          handleTyp _ = Nothing
 
           appFun x = foldl (TH.appE) x
           appConstr n = TH.appE (TH.conE $ mkName n)
@@ -205,7 +226,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally"],
-           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->"],
+           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -304,6 +325,7 @@ statement = declStat
             <|> forStat
             <|> braces statblock
             <|> assignStat
+            <|> typeStat
             <|> tryStat
             <|> applStat
             <|> breakStat
@@ -419,6 +441,11 @@ statement = declStat
             _ -> return ()
           e2 <- expr
           return [AssignStat e1 e2]
+
+      typeStat = do
+          i <- try $ identdecl <* reservedOp "::"
+          t <- runTypeParser
+          return [TypeStat (Right i) t]
 
       applStat = expr2stat' =<< expr
 

@@ -69,7 +69,8 @@ An experimental typechecker is available in the "Language.Javascript.JMacro.Type
 module Language.Javascript.JMacro (
   module Language.Javascript.JMacro.QQ,
   module Language.Javascript.JMacro.Base,
-  module Language.Javascript.JMacro.Prelude
+  module Language.Javascript.JMacro.Prelude,
+  module Language.Javascript.JMacro.Types
  ) where
 
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
@@ -77,3 +78,4 @@ import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1,
 import Language.Javascript.JMacro.Base hiding (expr2stat)
 import Language.Javascript.JMacro.QQ
 import Language.Javascript.JMacro.Prelude
+import Language.Javascript.JMacro.Types (JType(..))
