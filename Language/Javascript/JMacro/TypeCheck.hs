@@ -18,7 +18,7 @@ import qualified Data.Set as S
 
 
 data Constraint = Sub JType
-                | Disjunction Constraint Constraint
+                | Intersection Constraint Constraint
                   deriving (Eq, Ord, Show)
 
 data StoreVal = SVType JType
@@ -44,7 +44,6 @@ runTypecheck x = runTMonad . typecheck $ x
 prettyType :: JsToDoc a => a -> TMonad String
 prettyType x = return $ show $ jsToDoc x
 
-
 tyErr1 :: JsToDoc a => String -> a -> TMonad b
 tyErr1 s t = do
   st <- prettyType t
@@ -68,7 +67,6 @@ newTyVar = JTFree <$> newVarRef
 newNamedTyVar :: String -> TMonad JType
 newNamedTyVar n = JTFree . first (const $ Just n) <$> newVarRef
 
-
 addEnv :: Ident -> JType -> TMonad ()
 addEnv ident typ = do
   envstack <- tc_env <$> get
@@ -90,7 +88,6 @@ newConstrainedTyVar = do
   vars <- tc_vars <$> get
   modify (\s -> s {tc_vars = M.insert ref (SVConstrained S.empty) vars})
   return $ JTFree v
-
 
 addConstraint :: Constraint -> VarRef -> TMonad ()
 addConstraint c (mbName,ref) = do
@@ -115,8 +112,8 @@ resolveType rt = do
         JTFunc <$> mapM (go vars) args <*> go vars res
     go vars (JTList t) = JTList <$> go vars t
     go vars (JTMap  t) = JTMap  <$> go vars t
-    go vars (JTRecord vref xs) =
-        JTRecord vref . M.fromList <$> mapM (\(n,t) -> (\x->(n,x)) <$> go vars t) (M.toList xs)
+    go vars (JTRecord xs) =
+        JTRecord . M.fromList <$> mapM (\(n,t) -> (\x->(n,x)) <$> go vars t) (M.toList xs)
     go _ x = return x
 
 lookupEnv :: Ident -> TMonad JType
@@ -127,6 +124,7 @@ lookupEnv ident = resolveType =<< go . tc_env =<< get
           go _ = tyErr1 "unable to resolve variable name: " ident
 
 --subtype of a free variable is what!?
+--cheap solution -- unifies the free variable
 (<:) :: JType -> JType -> TMonad ()
 x <: y = do
      xt <- resolveType x
@@ -142,7 +140,9 @@ x <: y = do
            retx <: rety -- functions are covariant in return type
     go (JTList xt) (JTList yt) = go xt yt
     go (JTMap xt) (JTMap yt) = go xt yt
-    go (JTRecord _ _) (JTRecord _ _) = error "jtrecord"
+    go (JTRecord xm) (JTRecord ym) = do
+           M.toList xm <:
+           error "jtrecord"
     go xt yt = tyErr2 "Couldn't subtype" xt yt
 
 class JTypeCheck a where
@@ -183,10 +183,46 @@ instance JTypeCheck JVal where
     typecheck (JStr _) = return JTString
     typecheck (JList _) = undefined --glball of xs
     typecheck (JRegEx _) = undefined --regex object
-    typecheck (JHash mp) = JTRecord (Nothing,-1) . M.fromList <$> mapM go (M.toList mp)
+    typecheck (JHash mp) = JTRecord . M.fromList <$> mapM go (M.toList mp)
         where go (n,v) = (\x -> (n,x)) <$> typecheck v
     typecheck (JFunc args body) = undefined --bring args into scope as constrained vars, typecheck body, typecheck args, return function + frame of all things to clone
     typecheck (UnsatVal _) = undefined --saturate (avoiding creation of existing ids) then typecheck
+
+--greatest lower bound
+x /\ y = glb x y
+glb :: JType -> JType -> TMonad JType
+glb x y = return JTStat --this is obviously wrong
+
+
+instance JTypeCheck JStat where
+    typecheck (DeclStat ident) = newVarDecl ident
+    typecheck (ReturnStat e) = typecheck e
+    typecheck (IfStat e s s1) = do
+                            (<: JTBool) =<< typecheck e
+                            t <- typecheck s
+                            t1 <- typecheck s1
+                            t /\ t1
+    typecheck (WhileStat e s) = do
+                            (<: JTBool) =<< typecheck e
+                            typecheck s
+                            return JTStat
+    typecheck (ForInStat _ _ _ _) = undefined -- yipe!
+    typecheck (SwitchStat e xs d) = undefined -- check e, unify e with firsts, check seconds, take glb of seconds
+                                    --oh, hey, add typecase to language!?
+    typecheck (TryStat _ _ _ _) = undefined -- should be easy
+    typecheck (BlockStat xs) = do
+                            ts <- mapM typecheck xs
+                            return JTStat --should be glball
+    typecheck (ApplStat args body) = typecheck (ApplExpr args body)
+    typecheck (PostStat _ _) = undefined --easyeasy
+    typecheck (AssignStat e e1) = do
+                            t <- typecheck e
+                            t1 <- typecheck e1
+                            t1 <: t
+                            return JTStat
+    typecheck (UnsatBlock _) = undefined --oyvey
+    typecheck (AntiStat _) = undefined --oyvey
+    typecheck (TypeStat _ _) = undefined --these should be stripped earlier or not exist. we do want foriegnimports tho
 
 
 {-
@@ -196,7 +232,7 @@ data JType = JTNum
            | JTBool
            | JTStat
            | JTFunc [JType] (JType)
-           | JTList JType
+           | JTList JType --default case is tuple, type sig for list. tuples with <>
            | JTMap  JType
            | JTRecord VarRef [(String, JType)]
            | JTFree VarRef
@@ -250,23 +286,5 @@ data JExpr = ValExpr    JVal
            | ApplExpr   JExpr [JExpr]
            | UnsatExpr  (State [Ident] JExpr)
            | AntiExpr   String
-             deriving (Eq, Ord, Show, Data, Typeable)
-
--- | Statements
-data JStat = DeclStat   Ident
-           | ReturnStat JExpr
-           | IfStat     JExpr JStat JStat
-           | WhileStat  JExpr JStat
-           | ForInStat  Bool Ident JExpr JStat
-           | SwitchStat JExpr [(JExpr, JStat)] JStat
-           | TryStat    JStat Ident JStat JStat
-           | BlockStat  [JStat]
-           | ApplStat   JExpr [JExpr]
-           | PostStat   String JExpr
-           | AssignStat JExpr JExpr
-           | UnsatBlock (State [Ident] JStat)
-           | AntiStat   String
-           | TypeStat   (Either String Ident) JType
-           | BreakStat
              deriving (Eq, Ord, Show, Data, Typeable)
 -}

@@ -32,7 +32,7 @@ data JType = JTNum
            | JTFunc [JType] (JType)
            | JTList JType
            | JTMap  JType
-           | JTRecord VarRef (Map String JType)
+           | JTRecord (Map String JType)
            | JTFree VarRef
              deriving (Eq, Ord, Read, Show, Typeable, Data)
 
@@ -91,7 +91,7 @@ atomicType = do
     "String" -> return JTString
     "Bool" -> return JTBool
     (x:xs) | isUpper x -> fail $ "Unknown type: " ++ a
-           | otherwise -> (char '@' >> recordType (Just a)) <|> freeVar a
+           | otherwise -> freeVar a
     _ -> error "typeAtom"
 
 funOrAtomType :: TypeParser JType
@@ -106,17 +106,13 @@ listType :: TypeParser JType
 listType = JTList <$> brackets anyType
 
 anyType :: TypeParser JType
-anyType = nullType <|> parens anyType <|> funOrAtomType <|> listType <|> recordType Nothing
+anyType = nullType <|> parens anyType <|> funOrAtomType <|> listType <|> recordType
 
 anyNestedType :: TypeParser JType
-anyNestedType = nullType <|> parens anyType <|> atomicType <|> listType <|> recordType Nothing
+anyNestedType = nullType <|> parens anyType <|> atomicType <|> listType <|> recordType
 
-recordType :: Maybe String -> TypeParser JType
-recordType nm = braces $ do
-               (i,m) <- getState
-               maybe (return ()) (const $ fail $ "Cannot constrain already declared variable: " ++ fromJust nm) $ flip M.lookup m =<< nm
-               maybe (setState (i+1,m)) (\v -> setState (i+1,M.insert v i m)) nm
-               JTRecord (nm,i) . M.fromList <$> commaSep namePair
+recordType :: TypeParser JType
+recordType = braces $ JTRecord . M.fromList <$> commaSep namePair
     where namePair = do
             n <- identifier
             reservedOp "::"

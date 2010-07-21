@@ -96,6 +96,7 @@ data JExpr = ValExpr    JVal
            | ApplExpr   JExpr [JExpr]
            | UnsatExpr  (State [Ident] JExpr)
            | AntiExpr   String
+           | TypeExpr   Bool JExpr JType
              deriving (Eq, Ord, Show, Data, Typeable)
 
 -- | Values
@@ -221,6 +222,7 @@ instance Compos MultiComp where
            NewExpr e -> ret NewExpr `app` f e
            ApplExpr e xs -> ret ApplExpr `app` f e `app` mapM' f xs
            AntiExpr _ -> ret v'
+           TypeExpr b e t -> ret (TypeExpr b) `app` f e `app` ret t
            UnsatExpr _ -> ret v'
         MVal v' -> ret MVal `app` case v' of
            JVar i -> ret JVar `app` f i
@@ -447,6 +449,7 @@ instance JsToDoc JExpr where
     jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fsep . punctuate comma $ map jsToDoc xs)
     jsToDoc (NewExpr e) = text "new" <+> jsToDoc e
     jsToDoc (AntiExpr s) = text $ "`(" ++ s ++ ")`"
+    jsToDoc (TypeExpr b e t)  = parens $ jsToDoc e <+> text (if b then "/* ::!" else "/* ::") <+> jsToDoc t <+> text "*/"
     jsToDoc (UnsatExpr e) = jsToDoc $ sat_ e
 
 instance JsToDoc JVal where
@@ -479,7 +482,7 @@ instance JsToDoc JType where
     jsToDoc (JTFunc args ret) = fsep $ punctuate (text " ->") $ map ppType $ args ++ [ret]
     jsToDoc (JTList t) = brackets $ jsToDoc t
     jsToDoc (JTMap t) = text "Map" <+> ppType t
-    jsToDoc (JTRecord ref mp) = ppRef ref <> char '@' <> braces (fsep $ punctuate comma $ map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
+    jsToDoc (JTRecord mp) = braces (fsep $ punctuate comma $ map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
     jsToDoc (JTFree ref) = ppRef ref
 
 ppRef (Just n,_) = text n
@@ -637,8 +640,8 @@ jhAdd  k v m = M.insert k (toJExpr v) m
 jhFromList :: [(String, JExpr)] -> JVal
 jhFromList = JHash . M.fromList
 
-jtFromList :: VarRef -> [(String, JType)] -> JType
-jtFromList x y = JTRecord x $ M.fromList y
+jtFromList :: [(String, JType)] -> JType
+jtFromList y = JTRecord $ M.fromList y
 
 nullStat :: JStat
 nullStat = BlockStat []

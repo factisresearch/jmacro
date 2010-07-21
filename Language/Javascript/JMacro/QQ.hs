@@ -12,7 +12,7 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 -}
 -----------------------------------------------------------------------------
 
-module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM) where
+module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM, jmacroE2) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding ((<|>),many,optional,(<*))
 import Control.Monad.State.Strict
@@ -53,6 +53,10 @@ jmacro = QuasiQuoter quoteJMExp quoteJMPat
 -- | QuasiQuoter for a JMacro expression.
 jmacroE :: QuasiQuoter
 jmacroE = QuasiQuoter quoteJMExpE quoteJMPatE
+
+-- | QuasiQuoter for a JMacro expression.
+jmacroE2 :: Int -> QuasiQuoter
+jmacroE2 x = QuasiQuoter quoteJMExpE quoteJMPatE
 
 quoteJMPat :: String -> TH.PatQ
 quoteJMPat s = case parseJM s of
@@ -196,10 +200,9 @@ jm2th v = dataToExpQ (const Nothing
           handleStr x = Just $ TH.litE $ TH.StringL x
 
           handleTyp :: JType -> Maybe (TH.ExpQ)
-          handleTyp (JTRecord vr mp) = Just $
-                                       TH.appE (TH.appE (TH.varE $ mkName "jtFromList")
-                                                      (jm2th vr))
-                                               (jm2th $ M.toList mp)
+          handleTyp (JTRecord mp) = Just $
+                                    TH.appE (TH.varE $ mkName "jtFromList")
+                                          (jm2th $ M.toList mp)
 
           handleTyp _ = Nothing
 
@@ -226,7 +229,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally"],
-           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::"],
+           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -475,26 +478,36 @@ statement = declStat
 
 expr :: JMParser JExpr
 expr = do
-    e <- expr'
-    addIf e <|> return e
-  where addIf e = do
-          symbol "?"
-          t <- expr
+  e <- exprWithIf
+  addType e <|> addForcedType e <|> return e
+  where
+    addType e = do
+         reservedOp "::"
+         t <- runTypeParser
+         return (TypeExpr False e t)
+    addForcedType e = do
+         reservedOp "::!"
+         t <- runTypeParser
+         return (TypeExpr True e t)
+    exprWithIf = do
+         e <- rawExpr
+         addIf e <|> return e
+    addIf e = do
+          reservedOp "?"
+          t <- exprWithIf
           colon
-          el <- expr
+          el <- exprWithIf
           let ans = (IfExpr e t el)
           addIf ans <|> return ans
-
-        expr' = buildExpressionParser table dotExpr <?> "expression"
-
-        table = [[iop "*", iop "/", iop "%"],
-                 [iop "+", iop "-"],
-                 [iope "==", iope "!=", iope "<", iope ">",
-                  iope ">=", iope "<=", iope "==="],
-                 [iop "&&", iop "||"]
-                ]
-        iop  s  = Infix (reservedOp s >> return (InfixExpr s)) AssocLeft
-        iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
+    rawExpr = buildExpressionParser table dotExpr <?> "expression"
+    table = [[iop "*", iop "/", iop "%"],
+             [iop "+", iop "-"],
+             [iope "==", iope "!=", iope "<", iope ">",
+              iope ">=", iope "<=", iope "==="],
+             [iop "&&", iop "||"]
+            ]
+    iop  s  = Infix (reservedOp s >> return (InfixExpr s)) AssocLeft
+    iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
 
 dotExpr :: JMParser JExpr
 dotExpr = do
