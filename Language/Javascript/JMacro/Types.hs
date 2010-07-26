@@ -33,6 +33,7 @@ data JType = JTNum
            | JTList JType
            | JTMap  JType
            | JTRecord (Map String JType)
+           | JTImpossible
            | JTFree VarRef
              deriving (Eq, Ord, Read, Show, Typeable, Data)
 

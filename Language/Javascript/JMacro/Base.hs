@@ -32,7 +32,7 @@ module Language.Javascript.JMacro.Base (
   -- * Hash combinators
   jhEmpty, jhSingle, jhAdd, jhFromList,
   -- * Utility
-  jsSaturate, jmTypeSigStat, jtFromList
+  jsSaturate, jtFromList
   ) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding (empty)
@@ -57,7 +57,7 @@ import Language.Javascript.JMacro.Types
 --array comprehensions/generators?
 --add postfix stat
 
--- | Statements
+-- | Statementse
 data JStat = DeclStat   Ident
            | ReturnStat JExpr
            | IfStat     JExpr JStat JStat
@@ -71,7 +71,7 @@ data JStat = DeclStat   Ident
            | AssignStat JExpr JExpr
            | UnsatBlock (State [Ident] JStat)
            | AntiStat   String
-           | TypeStat   (Either String Ident) JType
+           | ForeignStat Ident JType
            | BreakStat
              deriving (Eq, Ord, Show, Data, Typeable)
 
@@ -129,9 +129,6 @@ expr2stat (PostExpr s x) = PostStat s x
 expr2stat (AntiExpr x) = AntiStat x
 expr2stat _ = nullStat
 
-jmTypeSigStat :: JExpr -> JType -> JStat
-jmTypeSigStat (ValExpr (JVar i)) t = TypeStat (Right i) t
-jmTypeSigStat x _ = error $ "jmTypeSigStat called on non-identifier expression: " ++ show (renderJs x)
 
 {--------------------------------------------------------------------
   Compos
@@ -162,8 +159,6 @@ composOpM_ = composOpFold (return ()) (>>)
 composOpFold :: Compos t => b -> (b -> b -> b) -> (t -> b) -> t -> b
 composOpFold z c f = unC . compos (\_ -> C z) (\(C x) (C y) -> C (c x y)) (C . f)
 newtype C b a = C { unC :: b }
-
-
 
 instance JMacro Ident where
     toMC = MIdent
@@ -208,9 +203,7 @@ instance Compos MultiComp where
            AssignStat e e' -> ret AssignStat `app` f e `app` f e'
            UnsatBlock _ -> ret v'
            AntiStat _ -> ret v'
-           TypeStat i t -> ret TypeStat `app` go i `app` ret t
-               where go (Right i) = ret Right `app` f i
-                     go x = ret x
+           ForeignStat i t -> ret ForeignStat `app` f i `app` ret t
            BreakStat -> ret BreakStat
         MExpr v' -> ret MExpr `app` case v' of
            ValExpr e -> ret ValExpr `app` f e
@@ -431,9 +424,7 @@ instance JsToDoc JStat where
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
     jsToDoc (PostStat op x) = jsToDoc x <> text op
     jsToDoc (AntiStat s) = text $ "`(" ++ s ++ ")`"
-    jsToDoc (TypeStat i t) = text "//" <+> go i <+> text "::" <+> jsToDoc t
-        where go (Left s) = text s
-              go (Right (StrI s)) = text s
+    jsToDoc (ForeignStat i t) = text "//foriegn" <+> jsToDoc i <+> text "::" <+> jsToDoc t
     jsToDoc (BlockStat xs) = jsToDoc (flattenBlocks xs)
         where flattenBlocks (BlockStat y:ys) = flattenBlocks y ++ flattenBlocks ys
               flattenBlocks (y:ys) = y : flattenBlocks ys
@@ -479,6 +470,7 @@ instance JsToDoc JType where
     jsToDoc JTString = text "String"
     jsToDoc JTBool = text "Bool"
     jsToDoc JTStat = text "()"
+    jsToDoc JTImpossible = text "_|_" -- "⊥"
     jsToDoc (JTFunc args ret) = fsep $ punctuate (text " ->") $ map ppType $ args ++ [ret]
     jsToDoc (JTList t) = brackets $ jsToDoc t
     jsToDoc (JTMap t) = text "Map" <+> ppType t

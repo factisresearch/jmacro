@@ -97,8 +97,6 @@ antiIdent s e = fromMC $ go (toMC e)
              | s == s' = MExpr (AntiExpr s)
           go (MExpr (SelExpr x i)) =
               MExpr (SelExpr (antiIdent s x) i)
-          go (MStat (TypeStat (Right (StrI s')) t))
-             | s == s' = MStat (TypeStat (Left s) t)
           go x = composOp go x
 
 antiIdents :: JMacro a => [String] -> a -> a
@@ -116,7 +114,7 @@ jm2th v = dataToExpQ (const Nothing
     where handleStat :: JStat -> Maybe (TH.ExpQ)
           handleStat (BlockStat ss) = Just $
                                       appConstr "BlockStat" $
-                                      TH.listE (blocks $ typesToEnd ss)
+                                      TH.listE (blocks ss)
               where blocks :: [JStat] -> [TH.ExpQ]
                     blocks [] = []
                     blocks (DeclStat (StrI i):xs) = case i of
@@ -143,10 +141,6 @@ jm2th v = dataToExpQ (const Nothing
                         | otherwise = css
                     fixIdent _ = "_"
 
-                    typesToEnd xs = rest ++ typeSigs
-                        where (typeSigs, rest) = partition isType xs
-                              isType (TypeStat _ _ ) = True
-                              isType _ = False
 
           handleStat (ForInStat b (StrI i) e s) = Just $
                  appFun (TH.varE $ forFunc)
@@ -172,9 +166,6 @@ jm2th v = dataToExpQ (const Nothing
                                       Right ans -> Just $ TH.appE (TH.varE (mkName "toStat"))
                                                                   (return ans)
                                       Left err -> Just $ fail err
-          handleStat (TypeStat (Left s) t) = Just $ TH.appE
-                          (TH.appE (TH.varE (mkName "jmTypeSigStat")) (TH.varE (mkName s)))
-                          (jm2th t)
 
           handleStat _ = Nothing
 
@@ -228,7 +219,7 @@ lexer = P.makeTokenParser jsLang
 
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
-           P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally"],
+           P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
            P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
@@ -321,6 +312,7 @@ statement :: JMParser [JStat]
 statement = declStat
             <|> funDecl
             <|> functionDecl
+            <|> foreignStat
             <|> returnStat
             <|> ifStat
             <|> whileStat
@@ -328,7 +320,6 @@ statement = declStat
             <|> forStat
             <|> braces statblock
             <|> assignStat
-            <|> typeStat
             <|> tryStat
             <|> applStat
             <|> breakStat
@@ -357,6 +348,12 @@ statement = declStat
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
         return $ [DeclStat (addBang n), AssignStat (ValExpr $ JVar n) (ValExpr $ JFunc as b)]
             where addBang (StrI x) = StrI ('!':'!':x)
+
+      foreignStat = do
+          reserved "foreign"
+          i <- try $ identdecl <* reservedOp "::"
+          t <- runTypeParser
+          return [ForeignStat i t]
 
       returnStat =
         reserved "return" >> (:[]) . ReturnStat <$> expr
@@ -445,10 +442,6 @@ statement = declStat
           e2 <- expr
           return [AssignStat e1 e2]
 
-      typeStat = do
-          i <- try $ identdecl <* reservedOp "::"
-          t <- runTypeParser
-          return [TypeStat (Right i) t]
 
       applStat = expr2stat' =<< expr
 

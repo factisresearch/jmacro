@@ -492,10 +492,6 @@ subtype x@(JTRec i) y@(JTRec i') = do
 
   go yl
 
-subtype x@(JTFunc argsx retx) y@(JTFunc argsy rety) = do
- when (length argsy < length argsx) $ tyErr2 "Couldn't match" x y
- zipWithM_ (<:) argsy argsx -- functions are contravariant in argument type
- retx <: rety -- functions are covariant in return type
 
 --List case
 subtype x y
