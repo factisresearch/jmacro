@@ -71,7 +71,7 @@ data JStat = DeclStat   Ident
            | AssignStat JExpr JExpr
            | UnsatBlock (State [Ident] JStat)
            | AntiStat   String
-           | ForeignStat Ident JType
+           | ForeignStat Ident JLocalType
            | BreakStat
              deriving (Eq, Ord, Show, Data, Typeable)
 
@@ -96,7 +96,7 @@ data JExpr = ValExpr    JVal
            | ApplExpr   JExpr [JExpr]
            | UnsatExpr  (State [Ident] JExpr)
            | AntiExpr   String
-           | TypeExpr   Bool JExpr JType
+           | TypeExpr   Bool JExpr JLocalType
              deriving (Eq, Ord, Show, Data, Typeable)
 
 -- | Values
@@ -471,11 +471,22 @@ instance JsToDoc JType where
     jsToDoc JTBool = text "Bool"
     jsToDoc JTStat = text "()"
     jsToDoc JTImpossible = text "_|_" -- "⊥"
-    jsToDoc (JTFunc args ret) = fsep $ punctuate (text " ->") $ map ppType $ args ++ [ret]
+    jsToDoc (JTFunc args ret) = fsep . punctuate (text " ->") . map ppType $ args' ++ [ret]
+        where args'
+               | null args = [JTStat]
+               | otherwise = args
     jsToDoc (JTList t) = brackets $ jsToDoc t
     jsToDoc (JTMap t) = text "Map" <+> ppType t
-    jsToDoc (JTRecord mp) = braces (fsep $ punctuate comma $ map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
+    jsToDoc (JTRecord mp) = braces (fsep . punctuate comma . map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
     jsToDoc (JTFree ref) = ppRef ref
+
+instance JsToDoc JLocalType where
+    jsToDoc (cs,t) = csDoc <> jsToDoc t
+        where csDoc
+                | null cs = text ""
+                | otherwise = (parens . fsep . punctuate comma $ map go cs) <+> text "=> "
+              go (vr,Sub   t) = ppRef vr  <+> text "<:" <+> jsToDoc t
+              go (vr,Super t) = jsToDoc t <+> text "<:" <+> ppRef vr
 
 ppRef (Just n,_) = text n
 ppRef (_,i) = text $ "t_"++show i

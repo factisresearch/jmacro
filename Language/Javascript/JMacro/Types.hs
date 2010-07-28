@@ -1,17 +1,17 @@
 {-# Language StandaloneDeriving, DeriveDataTypeable, FlexibleContexts, UndecidableInstances, FlexibleInstances #-}
 module Language.Javascript.JMacro.Types (
-  JType(..), anyType, parseType, runTypeParser, VarRef
+  JType(..), Constraint(..), JLocalType, VarRef, anyType, parseType, runTypeParser
   ) where
 
 import Control.Applicative hiding ((<|>))
 import Data.Char
 
-import Data.Maybe(fromJust)
+import Data.Maybe(fromMaybe)
 
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
 import Text.ParserCombinators.Parsec.Error
-import Text.Parsec.Prim hiding (runParser)
+import Text.Parsec.Prim hiding (runParser, try)
 import Text.ParserCombinators.Parsec.Language(emptyDef)
 import qualified Text.ParserCombinators.Parsec.Token as P
 
@@ -37,6 +37,14 @@ data JType = JTNum
            | JTFree VarRef
              deriving (Eq, Ord, Read, Show, Typeable, Data)
 
+data Constraint = Sub JType
+                | Super JType
+                -- | Choice Constraint Constraint
+                -- | GLB (Set JType)
+                -- | LUB (Set JType)
+                  deriving (Eq, Ord, Read, Show, Typeable, Data)
+
+type JLocalType = ([(VarRef,Constraint)], JType)
 
 type TypeParserState = (Int, Map String Int)
 
@@ -69,31 +77,39 @@ lexeme    = P.lexeme lexer
 parseType :: String -> Either ParseError JType
 parseType s = runParser anyType (0,M.empty) "" s
 
-runTypeParser = withLocalState (0,M.empty) anyType
+parseConstrainedType s = runParser constrainedType (0,M.empty) "" s
 
-withLocalState :: st -> CharParser st a -> CharParser st' a
-withLocalState initState subParser = mkPT $ \s@(State input pos otherState) -> do
-  res <- runParsecT subParser (State input pos initState)
-  return $ fixState otherState res
+runTypeParser = withLocalState (0,M.empty) constrainedType -- anyType
+
+withLocalState :: (Functor m, Monad m) => st -> ParsecT s st m a -> ParsecT s st' m a
+withLocalState initState subParser = mkPT $
+    \(State input pos otherState) -> fixState otherState <$> runParsecT subParser (State input pos initState)
       where
         fixState s res = (fmap . fmap) go res
             where go (Ok a (State input pos _localState) pe) = Ok a (State input pos s) pe
                   go (Error e) = (Error e)
 
+
 type TypeParser a = CharParser TypeParserState a
 
-nullType = reservedOp "()" >> return JTStat
+constrainedType :: TypeParser JLocalType
+constrainedType = do
+  c <- try (Just <$> (constraintHead <* reservedOp "=>")) <|> return Nothing
+  t <- anyType
+  return (fromMaybe [] c, t)
 
-atomicType :: TypeParser JType
-atomicType = do
-  a <- identifier
-  case a of
-    "Num" -> return JTNum
-    "String" -> return JTString
-    "Bool" -> return JTBool
-    (x:xs) | isUpper x -> fail $ "Unknown type: " ++ a
-           | otherwise -> freeVar a
-    _ -> error "typeAtom"
+--do we need to read supertype constraints, i.e. subtype constraints which have the freevar on the right??
+constraintHead :: TypeParser [(VarRef,Constraint)]
+constraintHead = parens go <|> go
+    where go = commaSep1 constraint
+          constraint = do
+            r <- freeVarRef =<< identifier
+            reservedOp "<:"
+            t <- anyType
+            return $ (r, Sub t)
+
+anyType :: TypeParser JType
+anyType = try (parens anyType) <|> funOrAtomType <|> listType <|> recordType
 
 funOrAtomType :: TypeParser JType
 funOrAtomType = do
@@ -106,11 +122,21 @@ funOrAtomType = do
 listType :: TypeParser JType
 listType = JTList <$> brackets anyType
 
-anyType :: TypeParser JType
-anyType = nullType <|> parens anyType <|> funOrAtomType <|> listType <|> recordType
-
 anyNestedType :: TypeParser JType
 anyNestedType = nullType <|> parens anyType <|> atomicType <|> listType <|> recordType
+
+nullType = reservedOp "()" >> return JTStat
+
+atomicType :: TypeParser JType
+atomicType = do
+  a <- identifier
+  case a of
+    "Num" -> return JTNum
+    "String" -> return JTString
+    "Bool" -> return JTBool
+    (x:xs) | isUpper x -> fail $ "Unknown type: " ++ a
+           | otherwise -> JTFree <$> freeVarRef a
+    _ -> error "typeAtom"
 
 recordType :: TypeParser JType
 recordType = braces $ JTRecord . M.fromList <$> commaSep namePair
@@ -120,11 +146,9 @@ recordType = braces $ JTRecord . M.fromList <$> commaSep namePair
             t <- anyType
             return (n, t)
 
-freeVar :: String -> TypeParser JType
-freeVar v = do
+freeVarRef :: String -> TypeParser VarRef
+freeVarRef v = do
   (i,m) <- getState
-  JTFree . (\x -> (Just v, x)) <$> maybe (setState (i+1,M.insert v i m) >> return i)
-             return
-             (M.lookup v m)
-
-
+  (\x -> (Just v, x)) <$> maybe (setState (i+1,M.insert v i m) >> return i)
+                                 return
+                                 (M.lookup v m)
