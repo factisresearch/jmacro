@@ -57,8 +57,8 @@ import Language.Javascript.JMacro.Types
 --array comprehensions/generators?
 --add postfix stat
 
--- | Statementse
-data JStat = DeclStat   Ident
+-- | Statements
+data JStat = DeclStat   Ident (Maybe JLocalType)
            | ReturnStat JExpr
            | IfStat     JExpr JStat JStat
            | WhileStat  JExpr JStat
@@ -189,7 +189,7 @@ instance Compos MultiComp where
     compos ret app f' v = case v of
         MIdent _ -> ret v
         MStat v' -> ret MStat `app` case v' of
-           DeclStat i -> ret DeclStat `app` f i
+           DeclStat i t -> ret DeclStat `app` f i `app` ret t
            ReturnStat i -> ret ReturnStat `app` f i
            IfStat e s s' -> ret IfStat `app` f e `app` f s `app` f s'
            WhileStat e s -> ret WhileStat `app` f e `app` f s
@@ -232,6 +232,19 @@ instance Compos MultiComp where
       where
         mapM' g = foldr (app . app (ret (:)) . g) (ret [])
         f x = ret fromMC `app` f' (toMC x)
+
+instance Compos JType where
+    compos ret app f v =
+        case v of
+          JTFunc args body -> ret JTFunc `app` mapM' f args `app` f body
+          JTList t -> ret JTList `app` f t
+          JTMap t -> ret JTMap `app` f t
+          JTRecord m -> ret JTRecord `app` m'
+              where (ls,ts) = unzip $ M.toList m
+                    m' = ret (M.fromAscList . zip ls) `app` mapM' f ts
+          x -> ret x
+      where
+        mapM' g = foldr (app . app (ret (:)) . g) (ret [])
 
 
 {--------------------------------------------------------------------
@@ -351,14 +364,14 @@ scopify x = evalState (fromMC <$> go (toMC x)) (newIdentSupply Nothing)
                    (MStat (BlockStat ss)) -> MStat . BlockStat <$>
                                              blocks ss
                        where blocks [] = return []
-                             blocks (DeclStat (StrI i) : xs) =  case i of
-                                ('!':'!':i') -> (DeclStat (StrI i'):) <$> blocks xs
-                                ('!':i') -> (DeclStat (StrI i'):) <$> blocks xs
+                             blocks (DeclStat (StrI i) t : xs) =  case i of
+                                ('!':'!':i') -> (DeclStat (StrI i') t:) <$> blocks xs
+                                ('!':i') -> (DeclStat (StrI i') t:) <$> blocks xs
                                 _ -> do
                                   (newI:st) <- get
                                   put st
                                   rest <- blocks xs
-                                  return $ [DeclStat newI `mappend` jsReplace_ [(StrI i, newI)] (BlockStat rest)]
+                                  return $ [DeclStat newI t `mappend` jsReplace_ [(StrI i, newI)] (BlockStat rest)]
                              blocks (x':xs) = (fromMC <$> go (toMC x')) <:> blocks xs
                              (<:>) = liftM2 (:)
                    (MStat (ForInStat b (StrI i) e s)) -> do
@@ -404,7 +417,10 @@ instance JsToDoc JStat where
     jsToDoc (IfStat cond x y) = text "if" <> parens (jsToDoc cond) $$ braceNest' (jsToDoc x) $$ mbElse
         where mbElse | y == BlockStat []  = empty
                      | otherwise = text "else" $$ braceNest' (jsToDoc y)
-    jsToDoc (DeclStat x) = text "var" <+> jsToDoc x
+    jsToDoc (DeclStat x t) = text "var" <+> jsToDoc x <> rest
+        where rest = case t of
+                       Nothing -> text ""
+                       Just tp -> text "/* ::" <+> jsToDoc tp <+> text "*/"
     jsToDoc (WhileStat p b)  = text "while" <> parens (jsToDoc p) $$ braceNest' (jsToDoc b)
     jsToDoc (UnsatBlock e) = jsToDoc $ sat_ e
     jsToDoc BreakStat = text "break"
@@ -598,7 +614,7 @@ jVar :: (ToSat a) => a -> JStat
 jVar f = UnsatBlock $ do
            (block, is) <- toSat_ f []
            let addDecls (BlockStat ss) =
-                  BlockStat $ map DeclStat is ++ ss
+                  BlockStat $ map (\x -> DeclStat x Nothing) is ++ ss
                addDecls x = x
            return $ addDecls block
 

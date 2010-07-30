@@ -4,17 +4,14 @@ module Language.Javascript.JMacro.TypeCheck where
 
 import Language.Javascript.JMacro.Base
 import Language.Javascript.JMacro.Types
-import Language.Javascript.JMacro.QQ
 
 import Control.Applicative
-import Control.Arrow
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Writer
 import Control.Monad.Error
 import Data.Map (Map)
-import Data.List(intercalate, nub, partition)
-import Data.Traversable hiding (sequence, mapM)
+import Data.List(intercalate, nub)
 import qualified Data.Traversable as T
 import qualified Data.Map as M
 import Data.Set(Set)
@@ -24,19 +21,7 @@ import Text.PrettyPrint.HughesPJ
 
 import Debug.Trace
 
--- Compos instance and utility
-instance Compos JType where
-    compos ret app f v =
-        case v of
-          JTFunc args body -> ret JTFunc `app` mapM' f args `app` f body
-          JTList t -> ret JTList `app` f t
-          JTMap t -> ret JTMap `app` f t
-          JTRecord m -> ret JTRecord `app` m'
-              where (ls,ts) = unzip $ M.toList m
-                    m' = ret (M.fromAscList . zip ls) `app` mapM' f ts
-          x -> ret x
-      where
-        mapM' g = foldr (app . app (ret (:)) . g) (ret [])
+-- Utility
 
 partitionOut :: (a -> Maybe b) -> [a] -> ([b],[a])
 partitionOut f xs' = foldr go ([],[]) xs'
@@ -59,10 +44,7 @@ unionWithM f m1 m2 = T.sequence $ M.unionWith (\xm ym -> join $ liftM2 f xm ym) 
 intersectionWithM :: (Monad m, Ord key) => (val -> val -> m b) -> Map key val -> Map key val -> m (Map key b)
 intersectionWithM f m1 m2 = T.sequence $ M.intersectionWith f m1 m2
 
---constraints can be resolved if you can't assign to a value any further, which is the same as if you generalize.
-
 -- Basic Types and TMonad
-
 data StoreVal = SVType JType
               | SVConstrained (Set Constraint)
                 deriving Show
@@ -71,9 +53,10 @@ data TCState = TCS {tc_env :: [Map Ident JType],
                     tc_vars :: Map Int StoreVal,
                     tc_stack :: [Set Int],
                     tc_resolvable :: Set Int,
+                    tc_schema_vars :: Set Int,
                     tc_varCt :: Int} deriving Show
 
-tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty 0
+tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty S.empty 0
 
 newtype TMonad a = TMonad (ErrorT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String, Applicative)
 
@@ -88,65 +71,66 @@ evalTMonad (TMonad x) = evalState (runErrorT x) tcStateEmpty
 
 runTMonad (TMonad x) = runState (runErrorT x) tcStateEmpty
 
--- Output prettyPrinters
-class PrettyType a where
-    prettyType :: a -> TMonad String
-
 --assums x is resolved
 freeVarsWithNames :: JType -> TMonad (Map Int String)
-freeVarsWithNames x = do
-  fmap (either id int2Name) . fst <$> execStateT (go x) (M.empty, 0)
+freeVarsWithNames x =
+  fmap (either id int2Name) . (\(a,_,_) -> a) <$>
+       execStateT (go x) (M.empty, S.empty, 0)
     where
-      go :: JType -> StateT (Map Int (Either String Int), Int) TMonad ()
-      go t@(JTFree (mbName, ref)) = do
-                        (m,ct) <- get
-                        case M.lookup ref m of
-                          Just (Left _) -> return ()
-                          Just (Right _) -> case mbName of
-                                              Just name -> put (M.insert ref (Left name) m, ct)
-                                              Nothing -> return ()
-                          Nothing -> do
-                               put (M.insert ref (Right ct) m, ct + 1)
-                               mapM_ (go . fromC) =<< lift (lookupConstraintsList (mbName, ref))
-      go x = composOpM_ go x
+      go :: JType -> StateT (Map Int (Either String Int), Set String, Int) TMonad ()
+      go (JTFree (mbName, ref)) = do
+        (m,ns,ct) <- get
+        let mkUnique n i
+                | n' `S.member` ns = mkUnique n (i + 1)
+                | otherwise = n'
+               where n' | i == 0 = n
+                        | otherwise = n ++ show i
+            putName n =
+                let n' = mkUnique n 0
+                in put (M.insert ref (Left n') m, S.insert n' ns, ct)
+        case M.lookup ref m of
+          Just (Left _) -> return ()
+          Just (Right _) -> case mbName of
+                              Just name -> putName name
+                              Nothing -> return ()
+          Nothing -> do case mbName of
+                          Just name -> putName name
+                          Nothing -> put (M.insert ref (Right ct) m, ns, ct + 1)
+                        mapM_ (go . fromC) =<< lift (lookupConstraintsList (mbName, ref))
+      go v = composOpM_ go v
 
       fromC (Sub t) = t
       fromC (Super t) = t
 
-      int2Name i
-          | q == 0 = [letter]
-          | otherwise = letter : show q
+      int2Name i | q == 0 = [letter]
+                 | otherwise = letter : show q
           where (q,r) = divMod i 26
-                letter = toEnum (fromEnum 'a' + r) :: Char
+                letter = toEnum (fromEnum 'a' + r)
 
-instance PrettyType JType where
-    prettyType x = do
-        xt <- resolveType x
-        names <- freeVarsWithNames xt
-        let xt' = replaceNames names xt
-        constraintStrings <- nub . concat <$> mapM (prettyConstraints names) (M.keys names)
-        let typStr = show $ jsToDoc $ replaceNames names xt
-        let constraintStr
-                | null constraintStrings = ""
-                | otherwise = "(" ++ intercalate ", " constraintStrings ++ ") => "
-        return $ constraintStr ++ typStr
+prettyType x = do
+  xt <- resolveType x
+  names <- freeVarsWithNames xt
+  constraintStrings <- nub . concat <$> mapM (prettyConstraints names) (M.keys names)
+  let constraintStr
+          | null constraintStrings = ""
+          | otherwise = "(" ++ intercalate ", " constraintStrings ++ ") => "
+  return $ constraintStr ++ (show . jsToDoc $ replaceNames names xt)
       where
         replaceNames names (JTFree (_,ref)) = JTFree (M.lookup ref names,ref)
         replaceNames names v = composOp (replaceNames names) v
 
-        prettyConstraints names ref =
-          map prettyConstraint <$> lookupConstraintsList (Nothing, ref)
+        prettyConstraints names ref = map go <$> lookupConstraintsList (Nothing, ref)
             where
               myName = case M.lookup ref names of
                          Just n -> n
                          Nothing -> "t_"++show ref
-              prettyConstraint (Sub x) = myName ++ " <: " ++ (show $ jsToDoc $ replaceNames names x)
-              prettyConstraint (Super x) = (show $ jsToDoc $ replaceNames names x) ++ " <: " ++ myName
+              go (Sub t) = myName ++ " <: " ++ (show $ jsToDoc $ replaceNames names t)
+              go (Super t) = (show $ jsToDoc $ replaceNames names t) ++ " <: " ++ myName
 
 tyErr0 :: String -> TMonad a
 tyErr0 x = throwError x
 
-tyErr1 :: PrettyType a => String -> a -> TMonad b
+tyErr1 :: String -> JType -> TMonad b
 tyErr1 s t = do
   st <- prettyType t
   throwError $ s ++ ": " ++ st
@@ -157,28 +141,18 @@ tyErr2 s t t' = do
   st' <- prettyType t'
   throwError $ s ++ ". Expected: " ++ st ++ ", Inferred: " ++ st'
 
-tyErr2l :: String -> [JType] -> [JType] -> TMonad a
-tyErr2l s t t' = do
-  sts <- mapM prettyType t
-  sts' <- mapM prettyType t'
-  throwError $ s ++ ". Expected: (" ++ intercalate ", " sts ++
-                 "), Inferred: (" ++ intercalate "," sts' ++")"
-
 prettyEnv :: TMonad [Map Ident String]
-prettyEnv = do
-  env <- tc_env <$> get
-  mapM (T.mapM prettyType) env
+prettyEnv = mapM (T.mapM prettyType) . tc_env =<< get
 
 runTypecheckFull x = runTMonad $ do
-                       r <- typecheck x
+                       r <- prettyType =<< typecheck x
                        e <- prettyEnv
                        return (r,e)
 
-runTypecheck x = evalTMonad . typecheck $ x
-
+runTypecheck x = evalTMonad $ prettyType =<< typecheck x
 
 evalTypecheck x = evalTMonad $ do
-                    typecheck x
+                    _ <- typecheck x
                     e <- prettyEnv
                     return e
 
@@ -190,7 +164,7 @@ newVarRef = do
                    tc_stack = addStack v (tc_stack s)})
   return $ (Nothing, v)
       where addStack v (s:ss) = S.insert v s : ss
-            addStack v _ = error "newVarRef: no sets" --[S.singleton v]
+            addStack _ _ = error "newVarRef: no sets" --[S.singleton v]
 
 newTyVar :: TMonad JType
 newTyVar = JTFree <$> newVarRef
@@ -208,9 +182,6 @@ lookupConstraintsList (_,ref) = do
     (Just (SVType t)) -> tyErr1 "lookupConstraints on instantiated type" t
     _ -> return []
 
---note, when checking constraints don't actually need to add new ones
---because, in theory, the contrarywise ones already exist
---on the other hand this could force cascading instantiations, which is good.
 instantiateVarRef :: VarRef -> JType -> TMonad ()
 instantiateVarRef vr@(_,ref) t = do
     cs <- lookupConstraintsList vr
@@ -223,14 +194,14 @@ checkConstraints t cs = mapM_ go cs
           go (Super t2) = t2 <: t
 
 addConstraint :: VarRef -> Constraint -> TMonad ()
-addConstraint vr@(mbName,ref) c = case c of
+addConstraint vr@(_,ref) c = case c of
        Sub t -> case t of
                   JTFree _ -> addC c
 
                   JTFunc args res -> do
                          args' <- mapM (const newTyVar) args
                          res'  <- newTyVar
-                         zipWithM (<:) args args' --contravariance
+                         zipWithM_ (<:) args args' --contravariance
                          res' <: res
                          instantiateVarRef vr $ JTFunc args' res'
 
@@ -239,14 +210,14 @@ addConstraint vr@(mbName,ref) c = case c of
                          t' <- JTRecord <$> foldM (unionWithM (\x y -> someLowerBound [x,y])) m ms
                          putCs (S.fromList $ Sub t' : restCs)
 
-                  JTList t -> do
+                  JTList t' -> do
                          vr' <- newVarRef
-                         addConstraint vr' (Sub t)
+                         addConstraint vr' (Sub t')
                          instantiateVarRef vr (JTList (JTFree vr'))
 
-                  JTMap t -> do
+                  JTMap t' -> do
                          vr' <- newVarRef
-                         addConstraint vr' (Sub t)
+                         addConstraint vr' (Sub t')
                          instantiateVarRef vr (JTMap (JTFree vr'))
 
                   _ -> do
@@ -258,7 +229,7 @@ addConstraint vr@(mbName,ref) c = case c of
                   JTFunc args res -> do
                          args' <- mapM (const newTyVar) args
                          res'  <- newTyVar
-                         zipWithM (<:) args' args --contravariance
+                         zipWithM_ (<:) args' args --contravariance
                          res <: res'
                          instantiateVarRef vr $ JTFunc args' res'
 
@@ -267,14 +238,14 @@ addConstraint vr@(mbName,ref) c = case c of
                          t' <- JTRecord <$> foldM (intersectionWithM (\x y -> someUpperBound [x,y])) m ms
                          putCs (S.fromList $ Super t' : restCs)
 
-                  JTList t -> do
+                  JTList t' -> do
                          vr' <- newVarRef
-                         addConstraint vr' (Super t)
+                         addConstraint vr' (Super t')
                          instantiateVarRef vr (JTList (JTFree vr'))
 
-                  JTMap t -> do
+                  JTMap t' -> do
                          vr' <- newVarRef
-                         addConstraint vr' (Super t)
+                         addConstraint vr' (Super t')
                          instantiateVarRef vr (JTMap (JTFree vr'))
 
                   _ -> do
@@ -319,19 +290,16 @@ newVarDecl ident = do
   addEnv ident v
   return v
 
-resolveTypeGen :: ((JType -> TMonad JType) -> JType -> TMonad JType)
-               -> JType
-               -> TMonad JType
-resolveTypeGen f x = go x
+resolveTypeGen :: ((JType -> TMonad JType) -> JType -> TMonad JType) -> JType -> TMonad JType
+resolveTypeGen f typ = go typ
     where
       go :: JType -> TMonad JType
-      go x@(JTFree (mbName, ref)) = do
+      go x@(JTFree (_, ref)) = do
         vars <- tc_vars <$> get
         case M.lookup ref vars of
           Just (SVType t) -> do
             res <- go t
-            -- mutation to shortcut pointer chasing
-            when (res /= t) $ modify (\s -> s {tc_vars = M.insert ref (SVType res) $ tc_vars s})
+            when (res /= t) $ modify (\s -> s {tc_vars = M.insert ref (SVType res) $ tc_vars s}) --mutation, shortcuts pointer chasing
             return res
           _ -> return x
       go x = f go x
@@ -339,47 +307,28 @@ resolveTypeGen f x = go x
 resolveType = resolveTypeGen composOpM
 resolveTypeShallow = resolveTypeGen (const return)
 
-{-
---mk these the same
---add mutation
-resolveType :: JType -> TMonad JType
-resolveType x = go x
-    where
-      go :: JType -> TMonad JType
-      go x@(JTFree (mbName, ref)) = do
-        vars <- tc_vars <$> get
-        case M.lookup ref vars of
-          Just (SVType t) -> go t
-          _ -> return x
-      go x = composOpM go x
-
---add mutation
-resolveTypeShallow :: JType -> TMonad JType
-resolveTypeShallow x = go x
-    where
-      go :: JType -> TMonad JType
-      go x@(JTFree (mbName, ref)) = do
-        vars <- tc_vars <$> get
-        case M.lookup ref vars of
-          Just (SVType t) -> go t
-          _ -> return x
-      go x = return x
--}
-
 integrateLocalType :: JLocalType -> TMonad JType
-integrateLocalType (env,t) = evalStateT (go t) M.empty
+integrateLocalType (env,typ) = flip evalStateT M.empty $ do
+                               mapM_ integrateEnv env
+                               cloneType typ
     where
-      go :: JType -> StateT (Map Int JType) TMonad JType
-      go (JTFree (mbName, ref)) = do
+      getRef (mbName, ref) = do
             m <- get
             case M.lookup ref m of
               Just newTy -> return newTy
               Nothing -> do
-                (_,r) <- lift $ newVarRef
-                let newTy = JTFree (mbName, r)
+                newTy <- (\x -> JTFree (mbName, snd x)) <$> lift newVarRef
                 put $ M.insert ref newTy m
                 return newTy
-      go x = composOpM go x
+
+      integrateEnv (vr,c) = do
+        newTy <- getRef vr
+        case c of
+          (Sub t) -> lift . (newTy <:) =<< cloneType t
+          (Super t) -> lift . (<: newTy) =<< cloneType t
+
+      cloneType (JTFree vr) = getRef vr
+      cloneType x = composOpM cloneType x
 
 lookupEnv :: Ident -> TMonad JType
 lookupEnv ident = resolveType =<< go . tc_env =<< get
@@ -389,73 +338,11 @@ lookupEnv ident = resolveType =<< go . tc_env =<< get
           go _ = tyErr0 $ "unable to resolve variable name: " ++ (show $ jsToDoc $ ident)
 
 freeVars :: JType -> TMonad (Set Int)
-freeVars x = do
-  x' <- resolveType x
-  execWriterT (go x')
-    where
-      go :: JType -> WriterT (Set Int) TMonad ()
-      go t@(JTFree (_, ref)) = tell (S.singleton ref)
-      go x = composOpM_ go x
+freeVars t = execWriterT . go =<< resolveType t
+    where go (JTFree (_, ref)) = tell (S.singleton ref)
+          go x = composOpM_ go x
 
-{-
-resolveConstraints :: Set Int -> TMonad ()
-resolveConstraints vrs = mapM_ (resolveConstraint vrs S.empty) $ S.toList vrs
-
-resolveConstraint :: Set Int -> Set Int -> Int -> TMonad ()
-resolveConstraint resolvable seen i
-    | i `S.member` seen = error "loop" -- not really
-    | i `S.member` resolvable = do
-             cs <- lookupConstraints (Nothing, i)
-             cs' <- mapM reduceConstraint $ S.toList cs
-             --now either resolve or error or set
-             return ()
-    | otherwise = return ()
-  where
-    reduceConstraint (Sub t) = Sub <$> (resolveConstrainedType <=< resolveType) t
-    reduceConstraint (Super t) = Super <$> (resolveConstrainedType <=< resolveType) t
---    reduceConstraint (GLB s) = GLB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
---    reduceConstraint (LUB s) = LUB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
-
-    resolveConstrainedType x = go x
-        where go t@(JTFree _) = do
-                t' <- resolveType t
-                case t' of
-                  (JTFree (_,v)) -> do
-                                  resolveConstraint resolvable (S.insert i seen) v
-                                  resolveType t'
-                  _ -> composOpM go t'
-              go x = composOpM go x
---func
---record
--}
-
-{-
-data JType = JTNum
-           | JTString
-           | JTBool
-           | JTStat
-           | JTFunc [JType] (JType)
-           | JTList JType --default case is tuple, type sig for list. tuples with <>
-           | JTMap  JType
-           | JTRecord VarRef [(String, JType)]
-           | JTFree VarRef
-             deriving (Eq, Ord, Read, Show, Typeable, Data)
-
-data Constraint = Sub JType
-                | Super JType
-                | Choice Constraint Constraint
-                | GLB (Set JType)
-                | LUB (Set JType)
-                  deriving (Eq, Ord, Show)
-
--}
-
-
-
-
--- Note, we can use this in place of integrateLocalType too...
--- should it really instantiate the result too, or not?
--- should we keep a list of schema vars? -- A: yes
+--NB actually should keep list of schema vars, since other types of free vars may be in function head or body.
 instantiateSchema :: [JType] -> TMonad [JType]
 instantiateSchema xs = evalStateT (mapM go xs) M.empty
     where
@@ -465,25 +352,16 @@ instantiateSchema xs = evalStateT (mapM go xs) M.empty
             case M.lookup ref m of
               Just newTy -> return newTy
               Nothing -> do
-                (_,r) <- lift $ newVarRef
-                let newRef = (mbName, r)
-                let newTy = JTFree newRef
-                put $ M.insert ref newTy m
-
+                newRef <- (\x -> (mbName, snd x)) <$> lift newVarRef
+                put $ M.insert ref (JTFree newRef) m
                 mapM_ (lift . addConstraint newRef <=< mapConstraint go) =<< lift (lookupConstraintsList vr)
-
-                return newTy
+                return (JTFree newRef)
       go x = composOpM go x
 
-
-
 -- Subtyping
-
---here we resolve shallowly on evry recursive call because
---instantiation is possible
 (<:) :: JType -> JType -> TMonad ()
 x <: y = do
-     xt <- resolveTypeShallow x
+     xt <- resolveTypeShallow x --shallow because subtyping can close
      yt <- resolveTypeShallow y
      if xt == yt
         then return ()
@@ -504,20 +382,17 @@ x <: y = do
         | ym `M.isProperSubmapOf` xm = intersectionWithM (<:) xm ym >> return ()
     go xt yt = tyErr2 "Couldn't subtype" xt yt
 
---have a maybe version that checks for the free cases
-
 someUpperBound :: [JType] -> TMonad JType
 someUpperBound xs = do
   res <- newTyVar
-  mapM (<: res) xs
+  mapM_ (<: res) xs
   return res
 
 someLowerBound :: [JType] -> TMonad JType
 someLowerBound xs = do
   res <- newTyVar
-  mapM (res <:) xs
+  mapM_ (res <:) xs
   return res
-
 
 x =.= y = do
       x <: y
@@ -614,6 +489,8 @@ instance JTypeCheck JVal where
                                            res <- typecheck body
                                            return (argst,res)
                            resolveType $ JTFunc argst' res'
+
+--add everything directly in head or tail of func to schema vars
 --                           free <- freeVars res'
 --                           resolveConstraints $ frame `S.difference` free
 --                           resolveType $ JTFunc argst' res'
@@ -626,7 +503,8 @@ instance JTypeCheck JVal where
     typecheck (UnsatVal _) = undefined --saturate (avoiding creation of existing ids) then typecheck
 
 instance JTypeCheck JStat where
-    typecheck (DeclStat ident) = newVarDecl ident >> return JTStat
+    typecheck (DeclStat ident Nothing) = newVarDecl ident >> return JTStat
+    typecheck (DeclStat ident (Just t)) = integrateLocalType t >>= addEnv ident >> return JTStat
     typecheck (ReturnStat e) = typecheck e
     typecheck (IfStat e s s1) = do
                             (<: JTBool) =<< typecheck e
@@ -657,7 +535,6 @@ instance JTypeCheck JStat where
     typecheck (AntiStat _) = undefined --oyvey
     typecheck BreakStat = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
-
 
 typecheckWithBlock stat = typecheck stat `catchError` \ e -> throwError $ e ++ "\nIn statement:\n" ++ renderStyle (style {mode = OneLineMode}) (renderJs stat)
 {-
@@ -761,4 +638,36 @@ luball :: [JType] -> TMonad JType
 luball (h:xs) = do
   foldM (\x y -> x /\ y) h xs
 luball [] = return JTStat
+-}
+
+{-
+resolveConstraints :: Set Int -> TMonad ()
+resolveConstraints vrs = mapM_ (resolveConstraint vrs S.empty) $ S.toList vrs
+
+resolveConstraint :: Set Int -> Set Int -> Int -> TMonad ()
+resolveConstraint resolvable seen i
+    | i `S.member` seen = error "loop" -- not really
+    | i `S.member` resolvable = do
+             cs <- lookupConstraints (Nothing, i)
+             cs' <- mapM reduceConstraint $ S.toList cs
+             --now either resolve or error or set
+             return ()
+    | otherwise = return ()
+  where
+    reduceConstraint (Sub t) = Sub <$> (resolveConstrainedType <=< resolveType) t
+    reduceConstraint (Super t) = Super <$> (resolveConstrainedType <=< resolveType) t
+--    reduceConstraint (GLB s) = GLB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
+--    reduceConstraint (LUB s) = LUB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
+
+    resolveConstrainedType x = go x
+        where go t@(JTFree _) = do
+                t' <- resolveType t
+                case t' of
+                  (JTFree (_,v)) -> do
+                                  resolveConstraint resolvable (S.insert i seen) v
+                                  resolveType t'
+                  _ -> composOpM go t'
+              go x = composOpM go x
+--func
+--record
 -}

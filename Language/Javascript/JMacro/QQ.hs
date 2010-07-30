@@ -109,6 +109,7 @@ jm2th v = dataToExpQ (const Nothing
                       `extQ` handleExpr
                       `extQ` handleVal
                       `extQ` handleStr
+                      `extQ` handleTyp
                      ) v
 
     where handleStat :: JStat -> Maybe (TH.ExpQ)
@@ -117,16 +118,19 @@ jm2th v = dataToExpQ (const Nothing
                                       TH.listE (blocks ss)
               where blocks :: [JStat] -> [TH.ExpQ]
                     blocks [] = []
-                    blocks (DeclStat (StrI i):xs) = case i of
-                     ('!':'!':i') -> jm2th (DeclStat (StrI i')) : blocks xs
+                    blocks (DeclStat (StrI i) t:xs) = case i of
+                     ('!':'!':i') -> jm2th (DeclStat (StrI i') t) : blocks xs
                      ('!':i') ->
                         [TH.appE (TH.lamE [TH.varP . mkName . fixIdent $ i'] $
                                  appConstr "BlockStat"
                                  (TH.listE . (ds:) . blocks $ xs)) (TH.appE (TH.varE $ mkName "jsv")
                                                                             (TH.litE $ TH.StringL i'))]
-                        where ds = TH.appE (TH.conE $ mkName "DeclStat")
-                                           (TH.appE (TH.conE $ mkName "StrI")
-                                                  (TH.litE $ TH.StringL i'))
+                        where ds =
+                                  TH.appE
+                                        (TH.appE (TH.conE $ mkName "DeclStat")
+                                               (TH.appE (TH.conE $ mkName "StrI")
+                                                      (TH.litE $ TH.StringL i')))
+                                        (jm2th t)
                      _ ->
                         [TH.appE (TH.varE $ mkName "jVar")
                               (TH.lamE [TH.varP . mkName . fixIdent $ i] $
@@ -289,14 +293,15 @@ identdecl = do
   when (i=="this") $ fail "Illegal attempt to name variable 'this'."
   return (StrI i)
 
+--varidentdecls can take types!
 identAssignDecl :: JMParser [JStat]
 identAssignDecl = varidentdecl >>= \i ->
                   (do
                     reservedOp "="
                     e <- expr
-                    return [DeclStat i, AssignStat (ValExpr (JVar (clean i))) e]
+                    return [DeclStat i Nothing, AssignStat (ValExpr (JVar (clean i))) e]
                   )
-                  <|> return [DeclStat i]
+                  <|> return [DeclStat i Nothing]
     where clean (StrI ('!':x)) = StrI x
           clean x = x
 
@@ -337,7 +342,7 @@ statement = declStat
         n <- varidentdecl
         as <- parens (commaSep identdecl) <|> many1 identdecl
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement)
-        return $ [DeclStat n, AssignStat (ValExpr $ JVar (clean n)) (ValExpr $ JFunc as b)]
+        return $ [DeclStat n Nothing, AssignStat (ValExpr $ JVar (clean n)) (ValExpr $ JFunc as b)]
             where clean (StrI ('!':x)) = StrI x
                   clean x = x
 
@@ -346,7 +351,7 @@ statement = declStat
         n <- identdecl
         as <- many identdecl
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
-        return $ [DeclStat (addBang n), AssignStat (ValExpr $ JVar n) (ValExpr $ JFunc as b)]
+        return $ [DeclStat (addBang n) Nothing, AssignStat (ValExpr $ JVar n) (ValExpr $ JFunc as b)]
             where addBang (StrI x) = StrI ('!':'!':x)
 
       foreignStat = do
