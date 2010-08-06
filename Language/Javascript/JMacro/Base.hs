@@ -27,7 +27,7 @@ module Language.Javascript.JMacro.Base (
   -- * Literals
   jsv,
   -- * Occasionally helpful combinators
-  jLam, jVar, jFor, jForIn, jForEachIn, jTryCatchFinally,
+  jLam, jVar, jVarTy, jFor, jForIn, jForEachIn, jTryCatchFinally,
   expr2stat, ToStat(..), nullStat,
   -- * Hash combinators
   jhEmpty, jhSingle, jhAdd, jhFromList,
@@ -237,6 +237,7 @@ instance Compos JType where
     compos ret app f v =
         case v of
           JTFunc args body -> ret JTFunc `app` mapM' f args `app` f body
+          JTForall vars t -> ret JTForall `app` ret vars `app` f t
           JTList t -> ret JTList `app` f t
           JTMap t -> ret JTMap `app` f t
           JTRecord m -> ret JTRecord `app` m'
@@ -420,7 +421,7 @@ instance JsToDoc JStat where
     jsToDoc (DeclStat x t) = text "var" <+> jsToDoc x <> rest
         where rest = case t of
                        Nothing -> text ""
-                       Just tp -> text "/* ::" <+> jsToDoc tp <+> text "*/"
+                       Just tp -> text " /* ::" <+> jsToDoc tp <+> text "*/"
     jsToDoc (WhileStat p b)  = text "while" <> parens (jsToDoc p) $$ braceNest' (jsToDoc b)
     jsToDoc (UnsatBlock e) = jsToDoc $ sat_ e
     jsToDoc BreakStat = text "break"
@@ -451,7 +452,10 @@ instance JsToDoc JExpr where
     jsToDoc (SelExpr x y) = cat [jsToDoc x <> char '.', jsToDoc y]
     jsToDoc (IdxExpr x y) = jsToDoc x <> brackets (jsToDoc y)
     jsToDoc (IfExpr x y z) = parens (jsToDoc x <+> char '?' <+> jsToDoc y <+> char ':' <+> jsToDoc z)
-    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text op, jsToDoc y]
+    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text op', jsToDoc y]
+        where op' | op == "++" = "+"
+                  | otherwise = op
+
     jsToDoc (PostExpr op x) = jsToDoc x <> text op
     jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fsep . punctuate comma $ map jsToDoc xs)
     jsToDoc (NewExpr e) = text "new" <+> jsToDoc e
@@ -487,6 +491,7 @@ instance JsToDoc JType where
     jsToDoc JTBool = text "Bool"
     jsToDoc JTStat = text "()"
     jsToDoc JTImpossible = text "_|_" -- "⊥"
+    jsToDoc (JTForall vars t) = text "forall" <+> fsep  (punctuate comma (map ppRef vars)) <> text "." <+> jsToDoc t
     jsToDoc (JTFunc args ret) = fsep . punctuate (text " ->") . map ppType $ args' ++ [ret]
         where args'
                | null args = [JTStat]
@@ -501,8 +506,8 @@ instance JsToDoc JLocalType where
         where csDoc
                 | null cs = text ""
                 | otherwise = (parens . fsep . punctuate comma $ map go cs) <+> text "=> "
-              go (vr,Sub   t) = ppRef vr  <+> text "<:" <+> jsToDoc t
-              go (vr,Super t) = jsToDoc t <+> text "<:" <+> ppRef vr
+              go (vr,Sub   t') = ppRef vr   <+> text "<:" <+> jsToDoc t'
+              go (vr,Super t') = jsToDoc t' <+> text "<:" <+> ppRef vr
 
 ppRef (Just n,_) = text n
 ppRef (_,i) = text $ "t_"++show i
@@ -513,6 +518,7 @@ ppType x = jsToDoc x
 {--------------------------------------------------------------------
   ToJExpr Class
 --------------------------------------------------------------------}
+
 
 -- | Things that can be marshalled into javascript values.
 -- Instantiate for any necessary data structures.
@@ -615,6 +621,19 @@ jVar f = UnsatBlock $ do
            (block, is) <- toSat_ f []
            let addDecls (BlockStat ss) =
                   BlockStat $ map (\x -> DeclStat x Nothing) is ++ ss
+               addDecls x = x
+           return $ addDecls block
+
+
+-- | Introduce a new variable with optional type into scope for the duration
+-- of the enclosed expression. The result is a block statement.
+-- Usage:
+-- @jVar $ \ x y -> {JExpr involving x and y}@
+jVarTy :: (ToSat a) => a -> (Maybe JLocalType) -> JStat
+jVarTy f t = UnsatBlock $ do
+           (block, is) <- toSat_ f []
+           let addDecls (BlockStat ss) =
+                  BlockStat $ map (\x -> DeclStat x t) is ++ ss
                addDecls x = x
            return $ addDecls block
 

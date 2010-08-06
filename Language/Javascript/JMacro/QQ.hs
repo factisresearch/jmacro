@@ -18,7 +18,7 @@ import Control.Applicative hiding ((<|>),many,optional,(<*))
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower, isUpper)
-import Data.List(isPrefixOf, sort, partition)
+import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
 import qualified Data.Map as M
 
@@ -132,10 +132,13 @@ jm2th v = dataToExpQ (const Nothing
                                                       (TH.litE $ TH.StringL i')))
                                         (jm2th t)
                      _ ->
-                        [TH.appE (TH.varE $ mkName "jVar")
-                              (TH.lamE [TH.varP . mkName . fixIdent $ i] $
-                                 appConstr "BlockStat"
-                                 (TH.listE $ blocks $ map (antiIdent i) xs))]
+                        [TH.appE
+                           (TH.appE (TH.varE $ mkName "jVarTy")
+                                  (TH.lamE [TH.varP . mkName . fixIdent $ i] $
+                                     appConstr "BlockStat"
+                                     (TH.listE $ blocks $ map (antiIdent i) xs)))
+                           (jm2th t)
+                        ]
 
                     blocks (x:xs) = jm2th x : blocks xs
 
@@ -278,14 +281,25 @@ ident = do
   return (StrI i)
 -}
 
-varidentdecl :: JMParser Ident
+
+getType = do
+  isForce <- (reservedOp "::!" >> return True) <|> (reservedOp "::" >> return False)
+  t <- runTypeParser
+  return (isForce, t)
+
+addForcedType (Just (True,t)) e = TypeExpr True e t
+addForcedType _ e = e
+
+--function !foo or function foo or var !x or var x, with optional type
+varidentdecl :: JMParser (Ident, Maybe (Bool, JLocalType))
 varidentdecl = do
   i <- identifierWithBang
   when ("jmId_" `isPrefixOf` i || "!jmId_" `isPrefixOf` i) $ fail "Illegal use of reserved jmId_ prefix in variable name."
   when (i=="this" || i=="!this") $ fail "Illegal attempt to name variable 'this'."
-  return (StrI i)
+  t <- optionMaybe getType
+  return (StrI i, t)
 
-
+--any other identifier decl
 identdecl :: JMParser Ident
 identdecl = do
   i <- identifier
@@ -295,13 +309,13 @@ identdecl = do
 
 --varidentdecls can take types!
 identAssignDecl :: JMParser [JStat]
-identAssignDecl = varidentdecl >>= \i ->
-                  (do
+identAssignDecl = do
+  (i,mbTyp) <- varidentdecl
+  optAssignStat <- optionMaybe $ do
                     reservedOp "="
                     e <- expr
-                    return [DeclStat i Nothing, AssignStat (ValExpr (JVar (clean i))) e]
-                  )
-                  <|> return [DeclStat i Nothing]
+                    return $ AssignStat (ValExpr (JVar (clean i))) (addForcedType mbTyp e)
+  return $ DeclStat i (fmap snd mbTyp) : maybe [] (:[]) optAssignStat
     where clean (StrI ('!':x)) = StrI x
           clean x = x
 
@@ -334,24 +348,29 @@ statement = declStat
       declStat = do
         reserved "var"
         res <- concat <$> commaSep1 identAssignDecl
-        semi
+        _ <- semi
         return res
 
       functionDecl = do
         reserved "function"
-        n <- varidentdecl
+
+        (i,mbTyp) <- varidentdecl
         as <- parens (commaSep identdecl) <|> many1 identdecl
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement)
-        return $ [DeclStat n Nothing, AssignStat (ValExpr $ JVar (clean n)) (ValExpr $ JFunc as b)]
+        return $ [DeclStat i (fmap snd mbTyp),
+                  AssignStat (ValExpr $ JVar (clean i)) (addForcedType mbTyp $ ValExpr $ JFunc as b)]
             where clean (StrI ('!':x)) = StrI x
                   clean x = x
 
       funDecl = do
         reserved "fun"
         n <- identdecl
+        mbTyp <- optionMaybe getType
         as <- many identdecl
         b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
-        return $ [DeclStat (addBang n) Nothing, AssignStat (ValExpr $ JVar n) (ValExpr $ JFunc as b)]
+        return $ [DeclStat (addBang n) (fmap snd mbTyp),
+                  AssignStat (ValExpr $ JVar n) (addForcedType mbTyp $ ValExpr $ JFunc as b)]
+
             where addBang (StrI x) = StrI ('!':'!':x)
 
       foreignStat = do
@@ -477,29 +496,26 @@ statement = declStat
 expr :: JMParser JExpr
 expr = do
   e <- exprWithIf
-  addType e <|> addForcedType e <|> return e
+  addType e
   where
     addType e = do
-         reservedOp "::"
-         t <- runTypeParser
-         return (TypeExpr False e t)
-    addForcedType e = do
-         reservedOp "::!"
-         t <- runTypeParser
-         return (TypeExpr True e t)
+         optTyp <- optionMaybe getType
+         case optTyp of
+           (Just (b,t)) -> return $ TypeExpr b e t
+           Nothing -> return e
     exprWithIf = do
          e <- rawExpr
          addIf e <|> return e
     addIf e = do
           reservedOp "?"
           t <- exprWithIf
-          colon
+          _ <- colon
           el <- exprWithIf
           let ans = (IfExpr e t el)
           addIf ans <|> return ans
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
     table = [[iop "*", iop "/", iop "%"],
-             [iop "+", iop "-"],
+             [iop "++", iop "+", iop "-"],
              [iope "==", iope "!=", iope "<", iope ">",
               iope ">=", iope "<=", iope "==="],
              [iop "&&", iop "||"]
@@ -636,7 +652,7 @@ natFloat = (char '0' >> zeroNumFloat)
     fraction        = char '.' >> (foldr op 0.0 <$> many1 digit <?> "fraction")
                     where
                       op d f    = (f + fromIntegral (digitToInt d))/10.0
-    exponent'       = do oneOf "eE"
+    exponent'       = do _ <- oneOf "eE"
                          f <- sign
                          power . f <$> decimal
                     where
@@ -655,9 +671,9 @@ natFloat = (char '0' >> zeroNumFloat)
 
 myStringLiteral :: Char -> JMParser String
 myStringLiteral t = do
-    char t
+    _ <- char t
     x <- concat <$> many myChar
-    char t
+    _ <- char t
     return x
  where myChar = do
          c <- noneOf [t]
@@ -670,9 +686,9 @@ myStringLiteral t = do
 
 myStringLiteralNoBr :: Char -> JMParser String
 myStringLiteralNoBr t = do
-    char t
+    _ <- char t
     x <- concat <$> many myChar
-    char t
+    _ <- char t
     return x
  where myChar = do
          c <- noneOf [t,'\n']

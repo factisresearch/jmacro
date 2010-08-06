@@ -35,6 +35,7 @@ data JType = JTNum
            | JTRecord (Map String JType)
            | JTImpossible
            | JTFree VarRef
+           | JTForall [VarRef] JType
              deriving (Eq, Ord, Read, Show, Typeable, Data)
 
 data Constraint = Sub JType
@@ -79,7 +80,7 @@ parseType s = runParser anyType (0,M.empty) "" s
 
 parseConstrainedType s = runParser constrainedType (0,M.empty) "" s
 
-runTypeParser = withLocalState (0,M.empty) constrainedType -- anyType
+runTypeParser = withLocalState (0,M.empty) (try (parens constrainedType) <|> constrainedType) -- anyType
 
 withLocalState :: (Functor m, Monad m) => st -> ParsecT s st m a -> ParsecT s st' m a
 withLocalState initState subParser = mkPT $
