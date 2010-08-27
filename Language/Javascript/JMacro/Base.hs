@@ -37,6 +37,8 @@ module Language.Javascript.JMacro.Base (
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding (empty)
 import Data.Function
+import Data.Maybe (fromMaybe)
+import qualified Data.Set as S
 import qualified Data.Map as M
 import Text.PrettyPrint.HughesPJ
 import Control.Monad.State.Strict
@@ -500,14 +502,23 @@ instance JsToDoc JType where
     jsToDoc (JTMap t) = text "Map" <+> ppType t
     jsToDoc (JTRecord mp) = braces (fsep . punctuate comma . map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
     jsToDoc (JTFree ref) = ppRef ref
+    jsToDoc (JTRigid ref cs) = text "[" <> ppRef ref <> text "]"
+{-
+        maybe (text "") (text " / " <>)
+                  (ppConstraintList . map (\x -> (ref,x)) $ S.toList cs) <>
+        text "]"
+-}
 
 instance JsToDoc JLocalType where
-    jsToDoc (cs,t) = csDoc <> jsToDoc t
-        where csDoc
-                | null cs = text ""
-                | otherwise = (parens . fsep . punctuate comma $ map go cs) <+> text "=> "
-              go (vr,Sub   t') = ppRef vr   <+> text "<:" <+> jsToDoc t'
-              go (vr,Super t') = jsToDoc t' <+> text "<:" <+> ppRef vr
+    jsToDoc (cs,t) = maybe (text "") (<+> text "=> ") (ppConstraintList cs) <> jsToDoc t
+
+ppConstraintList cs
+    | null cs = Nothing
+    | otherwise = Just . parens . fsep . punctuate comma $ map go cs
+    where
+      go (vr,Sub   t') = ppRef vr   <+> text "<:" <+> jsToDoc t'
+      go (vr,Super t') = jsToDoc t' <+> text "<:" <+> ppRef vr
+
 
 ppRef (Just n,_) = text n
 ppRef (_,i) = text $ "t_"++show i

@@ -7,14 +7,17 @@ import Language.Javascript.JMacro.Types
 import Language.Javascript.JMacro.QQ
 
 import Control.Applicative
+import Control.Arrow((&&&))
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Writer
 import Control.Monad.Error
+import Data.Either
 import Data.Map (Map)
 import Data.Maybe(catMaybes, fromMaybe)
 import Data.List(intercalate, nub)
 import qualified Data.Traversable as T
+import qualified Data.Foldable as F
 import qualified Data.Map as M
 import Data.Set(Set)
 import qualified Data.Set as S
@@ -56,13 +59,26 @@ data TCState = TCS {tc_env :: [Map Ident JType],
                     tc_vars :: Map Int StoreVal,
                     tc_stack :: [Set Int],
                     tc_frozen :: Set Int,
-                    tc_varCt :: Int} deriving Show
+                    tc_varCt :: Int,
+                    tc_context :: [TMonad String]}
 
-tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty 0
+instance Show TCState where
+    show (TCS env vars stack frozen varCt cxt) =
+        "env: " ++ show env ++ "\n" ++
+        "vars: " ++ show vars ++ "\n" ++
+        "stack: " ++ show stack ++ "\n" ++
+        "frozen: " ++ show frozen ++ "\n" ++
+        "varCt: " ++ show varCt
 
-newtype TMonad a = TMonad (ErrorT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String, Applicative)
+tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty 0 []
 
-instance Applicative (ErrorT String (State TCState)) where
+newtype TMonad a = TMonad (ErrorT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String)
+
+instance Applicative TMonad where
+    pure = return
+    (<*>) = ap
+
+instance Applicative (StateT a TMonad) where
     pure = return
     (<*>) = ap
 
@@ -73,42 +89,58 @@ evalTMonad (TMonad x) = evalState (runErrorT x) tcStateEmpty
 
 runTMonad (TMonad x) = runState (runErrorT x) tcStateEmpty
 
+withContext :: TMonad a -> TMonad String -> TMonad a
+withContext act cxt = do
+  cs <- tc_context <$> get
+  modify (\s -> s {tc_context = cxt : cs})
+  res <- act
+  modify (\s -> s {tc_context = cs})
+  return res
+
 --assums x is resolved
---TODO pull names from forall...
 freeVarsWithNames :: JType -> TMonad (Map Int String)
 freeVarsWithNames x =
-  fmap (either id int2Name) . (\(a,_,_) -> a) <$>
+  intsToNames . (\(a,_,_) -> a) <$>
        execStateT (go x) (M.empty, S.empty, 0)
     where
       go :: JType -> StateT (Map Int (Either String Int), Set String, Int) TMonad ()
-      go (JTFree (mbName, ref)) = do
+      go (JTFree vr) = handleVR vr
+      go (JTRigid vr cs) = handleVR vr >> F.traverse_ (go . fromC) cs
+      go v = composOpM_ go v
+
+      handleVR (mbName, ref) = do
         (m,ns,ct) <- get
-        let mkUnique n i
-                | n' `S.member` ns = mkUnique n (i + 1)
-                | otherwise = n'
-               where n' | i == 0 = n
-                        | otherwise = n ++ show i
-            putName n =
-                let n' = mkUnique n 0
-                in put (M.insert ref (Left n') m, S.insert n' ns, ct)
         case M.lookup ref m of
           Just (Left _) -> return ()
           Just (Right _) -> case mbName of
-                              Just name -> putName name
+                              Just name -> putName name ref
                               Nothing -> return ()
-          Nothing -> do case mbName of
-                          Just name -> putName name
-                          Nothing -> put (M.insert ref (Right ct) m, ns, ct + 1)
-                        mapM_ (go . fromC) =<< lift (lookupConstraintsList (mbName, ref))
-      go v = composOpM_ go v
+          Nothing -> do
+            case mbName of
+              Just name -> putName name ref
+              Nothing -> put (M.insert ref (Right ct) m, ns, ct + 1)
+            mapM_ (go . fromC) =<< lift (lookupConstraintsList (mbName, ref))
+
+      putName n ref = do
+        (m,ns,ct) <- get
+        let n' = mkUnique ns n 0
+        put (M.insert ref (Left n') m, S.insert n' ns, ct)
+
+      mkUnique ns n i
+          | n' `S.member` ns = mkUnique ns n (i + 1)
+          | otherwise = n'
+          where n' | i == 0 = n
+                   | otherwise = n ++ show i
 
       fromC (Sub t) = t
       fromC (Super t) = t
 
-      int2Name i | q == 0 = [letter]
-                 | otherwise = letter : show q
-          where (q,r) = divMod i 26
-                letter = toEnum (fromEnum 'a' + r)
+      intsToNames x = fmap (either id go) x
+          where go i = mkUnique (S.fromList $ lefts $ M.elems x) (int2Name i) 0
+                int2Name i | q == 0 = [letter]
+                           | otherwise = letter : show q
+                    where (q,r) = divMod i 26
+                          letter = toEnum (fromEnum 'a' + r)
 
 prettyType x = do
   xt <- resolveType x
@@ -143,11 +175,14 @@ tyErr1 s t = do
   st <- prettyType t
   throwError $ s ++ ": " ++ st
 
-tyErr2 :: String -> JType -> JType -> TMonad a
-tyErr2 s t t' = do
+tyErr2ext :: String -> String -> String -> JType -> JType -> TMonad a
+tyErr2ext s s1 s2 t t' = do
   st <- prettyType t
   st' <- prettyType t'
-  throwError $ s ++ ". Expected: " ++ st ++ ", Inferred: " ++ st'
+  throwError $ s ++ ". " ++ s1 ++ ": " ++ st ++ ", " ++ s2 ++ ": " ++ st'
+
+tyErr2Sub :: JType -> JType -> TMonad a
+tyErr2Sub t t' = tyErr2ext "Couldn't apply subtype relation" "Subtype" "Supertype" t t'
 
 prettyEnv :: TMonad [Map Ident String]
 prettyEnv = mapM (T.mapM prettyType) . tc_env =<< get
@@ -164,11 +199,15 @@ evalTypecheck x = evalTMonad $ do
                     e <- prettyEnv
                     return e
 
-typecheckMain x = do
-  r <- typecheck x
-  setFrozen . S.unions . tc_stack =<< get
-  tryCloseFrozenVars
-  return r
+typecheckMain x = go `catchError` handler
+    where go = do
+            r <- typecheck x
+            setFrozen . S.unions . tc_stack =<< get
+            tryCloseFrozenVars
+            return r
+          handler e = do
+                 cxt <- tc_context <$> get
+                 throwError =<< (unlines . (e:) <$> sequence cxt)
 
 -- Manipulating VarRefs and Constraints
 
@@ -185,14 +224,6 @@ newVarRef = do
 newTyVar :: TMonad JType
 newTyVar = JTFree <$> newVarRef
 
-{-
-freshType :: TMonad JType
-freshType = do
-  vr@(_,ref) <- newVarRef
-  modify (\s -> s {tc_vars = M.insert ref (SVFreshType ref) (tc_vars s)})
-  return $ JTFree vr
--}
-
 mapConstraint :: (Monad m, Functor m) => (JType -> m JType) -> Constraint -> m Constraint
 mapConstraint f (Sub t) = Sub <$> f t
 mapConstraint f (Super t) = Super <$> f t
@@ -204,7 +235,6 @@ lookupConstraintsList vr@(_,ref) = do
   case M.lookup ref vars of
     (Just (SVConstrained cs)) -> mapM (mapConstraint resolveType) (S.toList cs)
     (Just (SVType t)) -> tyErr1 "lookupConstraints on instantiated type" t
---    (Just (SVFreshType t)) -> tyErr1 "lookupConstraints on qualified (fresh) type" (JTFree vr)
     Nothing -> return []
 
 instantiateVarRef :: VarRef -> JType -> TMonad ()
@@ -218,35 +248,12 @@ checkConstraints t cs = mapM_ go cs
     where go (Sub t2) = t <: t2
           go (Super t2) = t2 <: t
 
-
---TODO: collect foralls and do contra or covariant some upper or some lower and regeneralize
 addConstraint :: VarRef -> Constraint -> TMonad ()
 addConstraint vr@(_,ref) c = case c of
        Sub t -> case t of
                   JTFree _ -> addC c
 
-                  -- x <: \/ a. t, x <: \/ b. t2 --->
-                  -- x <: \/ a b. y, y <: [t], y <: [t2]
-
-                  --TODO: test
-                  JTForall vars t -> do
-                         let mergeForall (vs1,b1) (vs2,b2) = do
-                               rt <- newTyVar
-                               (_, frame) <- withLocalScope $ do
-                                     t1 <- instantiateScheme vs1 b1
-                                     t2 <- instantiateScheme vs2 b2
-                                     rt <: t1
-                                     rt <: t2
-                               addRefsToStack $ frame
-                               -- TODO we can set some frozen, but how...
-                               return (frame2VarRefs frame, rt)
-
-                         (foralls,restCs) <- findForallSubs <$> lookupConstraintsList vr
-                         (vars',t') <- foldM mergeForall (vars,t) foralls
-                         t'' <- resolveType $ JTForall vars' t'
-                         putCs (S.fromList $ Sub t'' : restCs)
-
-                  JTForall vars t -> addC c --we can make this smarter later
+                  JTForall vars t -> addForallConstraint (Left (vars, t))
 
                   JTFunc args res -> do
                          args' <- mapM (const newTyVar) args
@@ -255,10 +262,7 @@ addConstraint vr@(_,ref) c = case c of
                          res' <: res
                          instantiateVarRef vr $ JTFunc args' res'
 
-                  JTRecord m -> do
-                         (ms,restCs) <- findRecordSubs <$> lookupConstraintsList vr
-                         t' <- JTRecord <$> foldM (unionWithM (\x y -> someLowerBound [x,y])) m ms
-                         putCs (S.fromList $ Sub t' : restCs)
+                  JTRecord m -> addRecConstraint (Left m)
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -270,32 +274,23 @@ addConstraint vr@(_,ref) c = case c of
                          addConstraint vr' (Sub t')
                          instantiateVarRef vr (JTMap (JTFree vr'))
 
-                  _ -> do
-                         instantiateVarRef vr t
+                  JTRigid _ cs -> do
+                         (subs,sups) <- partitionCs <$> lookupConstraintsList vr
+                         let (subs1,sups1) = partitionCs $ S.toList cs
+                         when ((null sups1 && (not . null) sups) ||
+                               (null subs1 && (not . null) subs)) $ tyErr2Sub (JTFree vr) t
+                         mapM_ (uncurry (<:)) [(x,y) | x <- subs, y <- subs1]
+                         mapM_ (uncurry (<:)) [(y,x) | x <- sups, y <- sups1]
+
+                         modify (\s -> s {tc_vars = M.insert ref (SVType t) (tc_vars s)}) --can all this be subsumed by a call to instantiate varref and casing on jtrigid carefully in the <: relationship?
+                         -- a polymorphic var is a subtype of another if it is "bigger" on the lattice -- its subtypes are lower and supertypes are higher. sups a > sups b, subs a < subs b
+                  _ -> instantiateVarRef vr t
 
        Super t -> case t of
                   JTFree _ -> addC c
 
-                  --TODO: test more
-                  JTForall vars t -> do
-                         let mergeForall (vs1,b1) (vs2,b2) = do
-                               rt <- newTyVar
-                               (_, frame) <- withLocalScope $ do
-                                     t1 <- instantiateScheme vs1 b1
-                                     t2 <- instantiateScheme vs2 b2
-                                     t1 <: rt
-                                     t2 <: rt
-                               addRefsToStack $ frame
-                               -- TODO we can set some frozen, but how...
-                               return (frame2VarRefs frame, rt)
+                  JTForall vars t -> addForallConstraint (Right (vars,t))
 
-                         (foralls,restCs) <- findForallSups <$> lookupConstraintsList vr
-                         (vars',t') <- foldM mergeForall (vars,t) foralls
-                         t'' <- resolveType $ JTForall vars' t'
-                         putCs (S.fromList $ Super t'' : restCs)
-
-
-                  JTForall vars t -> addC c --we can make this smarter later
                   JTFunc args res -> do
                          args' <- mapM (const newTyVar) args
                          res'  <- newTyVar
@@ -303,10 +298,7 @@ addConstraint vr@(_,ref) c = case c of
                          res <: res'
                          instantiateVarRef vr $ JTFunc args' res'
 
-                  JTRecord m -> do
-                         (ms,restCs) <- findRecordSups <$> lookupConstraintsList vr
-                         t' <- JTRecord <$> foldM (intersectionWithM (\x y -> someUpperBound [x,y])) m ms
-                         putCs (S.fromList $ Super t' : restCs)
+                  JTRecord m -> addRecConstraint (Right m)
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -318,11 +310,21 @@ addConstraint vr@(_,ref) c = case c of
                          addConstraint vr' (Super t')
                          instantiateVarRef vr (JTMap (JTFree vr'))
 
-                  _ -> do
-                         instantiateVarRef vr t
+                  JTRigid _ cs -> do
+                         (subs,sups) <- partitionCs <$> lookupConstraintsList vr
+                         let (subs1,sups1) = partitionCs $ S.toList cs
+                         when ((null sups1 && (not . null) sups) ||
+                               (null subs1 && (not . null) subs)) $ tyErr2Sub (JTFree vr) t
+                         mapM_ (uncurry (<:)) [(y,x) | x <- subs, y <- subs1]
+                         mapM_ (uncurry (<:)) [(x,y) | x <- sups, y <- sups1]
+
+                         modify (\s -> s {tc_vars = M.insert ref (SVType t) (tc_vars s)}) --can all this be subsumed by a call to instantiate varref and casing on jtrigid carefully in the <: relationship?
+                         -- a polymorphic var is a subtype of another if it is "bigger" on the lattice -- its subtypes are lower and supertypes are higher. sups a > sups b, subs a < subs b
+
+                  _ -> instantiateVarRef vr t
     where
       putCs cs =
-        modify (\s -> s {tc_vars = M.insert ref (SVConstrained cs) (tc_vars s)})
+        modify (\s -> s {tc_vars = M.insert ref (SVConstrained $ S.fromList $ cs) (tc_vars s)})
 
       addC constraint = do
         cs <- lookupConstraintsList vr
@@ -344,6 +346,75 @@ addConstraint vr@(_,ref) c = case c of
           where go (Super (JTForall vars t)) = Just (vars,t)
                 go _ = Nothing
 
+      partitionCs [] = ([],[])
+      partitionCs (Sub t:cs) = (t:subs,sups)
+          where (subs,sups) = partitionCs cs
+      partitionCs (Super t:cs) = (subs,t:sups)
+          where (subs,sups) = partitionCs cs
+
+      --left is sub, right is super
+      --There really should be at most one existing sub and sup constraint
+      addRecConstraint eM = do
+        (subs,restCs) <- findRecordSubs <$> lookupConstraintsList vr
+        let (sups,restCs') = findRecordSups restCs
+
+            mergeSubs [] = return Nothing
+            mergeSubs [m] = return $ Just m
+            mergeSubs (m:ms) = Just <$> foldM (unionWithM (\x y -> someLowerBound [x,y])) m ms
+            mergeSups [] = return Nothing
+            mergeSups [m] = return $ Just m
+            mergeSups (m:ms) = Just <$> foldM (intersectionWithM (\x y -> someUpperBound [x,y])) m ms
+        mbSub <- mergeSubs $ case eM of
+                               Left m -> m : subs
+                               _ -> subs
+        mbSup <- mergeSups $ case eM of
+                               Right m -> m : sups
+                               _ -> sups
+
+        case (mbSub, mbSup) of
+          (Just sub, Just sup) -> do
+            when (not $ M.isSubmapOfBy (\_ _ -> True) sub sup) $ tyErr2ext "Incompatible constraints" "Subtype constraint" "Supertype constraint" (JTRecord sub) (JTRecord sup)
+            _ <- intersectionWithM (\x y -> y <: x) sub sup
+            putCs $ Sub (JTRecord sub) : Super (JTRecord sup) : restCs'
+          (Just sub, Nothing)  -> putCs $ Sub (JTRecord sub) : restCs'
+          (Nothing , Just sup) -> putCs $ Super (JTRecord sup) : restCs'
+          _ -> return ()
+
+      --There really should be at most one existing sub and sup constraint
+      addForallConstraint eVT = do
+        (subs,restCs) <- findForallSubs <$> lookupConstraintsList vr
+        let (sups,restCs') = findForallSups restCs
+            mergeSubs [] = return Nothing
+            mergeSubs [s] = return $ Just $ uncurry JTForall s
+            mergeSubs ss = do
+              rt <- newTyVar
+              (_,frame) <- withLocalScope $ mapM (\s -> (rt <:) <$> uncurry instantiateScheme s) ss
+              -- set those not in both head and tail frozen
+              tryCloseFrozenVars
+              Just <$> resolveType (JTForall (frame2VarRefs frame) rt)
+
+            mergeSups [] = return Nothing
+            mergeSups [s] = return $ Just $ uncurry JTForall s
+            mergeSups ss = do
+              rt <- newTyVar
+              (_,frame) <- withLocalScope $ mapM (\s -> (<: rt) <$> uncurry instantiateScheme s) ss
+              -- set those not in both head and tail frozen
+              tryCloseFrozenVars
+              Just <$> resolveType (JTForall (frame2VarRefs frame) rt)
+
+        mbSub <- mergeSubs $ case eVT of
+                               Left s -> s:subs
+                               _ -> subs
+        mbSup <- mergeSups $ case eVT of
+                               Right s -> s:sups
+                               _ -> sups
+        case (mbSub, mbSup) of
+          (Just sub, Just sup) -> do
+            sup <: sub
+            putCs $ Sub sub : Super sup : restCs'
+          (Just sub, Nothing)  -> putCs $ Sub sub : restCs'
+          (Nothing , Just sup) -> putCs $ Super sup : restCs'
+          _ -> return ()
 
 tryCloseFrozenVars :: TMonad ()
 tryCloseFrozenVars = return ()
@@ -362,7 +433,7 @@ withLocalScope act = do
 setFrozen :: Set Int -> TMonad ()
 setFrozen x = modify (\s -> s {tc_frozen = tc_frozen s `S.union` x})
 
-addRefsToStack x = modify (\s -> s {tc_stack = foldr addToStack (tc_stack s) (S.toList x) })
+addRefsToStack x = modify (\s -> s {tc_stack = F.foldr addToStack (tc_stack s) x })
 
 frame2VarRefs frame = (\x -> (Nothing,x)) <$> S.toList frame
 
@@ -379,7 +450,6 @@ newVarDecl ident = do
   addEnv ident v
   return v
 
---if a var in a forall isn't free, drop it.
 resolveTypeGen :: ((JType -> TMonad JType) -> JType -> TMonad JType) -> JType -> TMonad JType
 resolveTypeGen f typ = go typ
     where
@@ -410,7 +480,6 @@ resolveTypeGen f typ = go typ
 resolveType = resolveTypeGen composOpM
 resolveTypeShallow = resolveTypeGen (const return)
 
---TODO: generalize (i.e. implicit forall)
 integrateLocalType :: JLocalType -> TMonad JType
 integrateLocalType (env,typ) = do
   (r, frame) <- withLocalScope $ flip evalStateT M.empty $ do
@@ -466,16 +535,33 @@ instantiateScheme vrs t = evalStateT (go t) M.empty
                            mapM_ (lift . addConstraint newRef <=< mapConstraint go) =<< lift (lookupConstraintsList vr)
                            return (JTFree newRef)
       go x = composOpM go x
-{-
+
 --only works on resolved types
-instantiateSchemeWithFreshTypes :: [VarRef] -> JType -> ([JType],TMonad JType)
-instantiateSchemeWithFreshTypes vrs t = do
-  fts <- mapM (const newTyVar) vrs
-  let m = M.fromList $ zip (map snd vrs) fts
-      go x@(JTFree (_, ref)) = fromMaybe x $ M.lookup ref m
-      go x = composOp go x
-  return $ (fts, go t)
--}
+instantiateRigidScheme :: [VarRef] -> JType -> TMonad JType
+instantiateRigidScheme vrs t = evalStateT (go t) M.empty
+    where
+      schemeVars = S.fromList $ map snd vrs
+      go :: JType -> StateT (Map Int JType) TMonad JType
+      go (JTFree vr@(mbName, ref))
+          | ref `S.member` schemeVars = do
+                       m <- get
+                       case M.lookup ref m of
+                         Just newTy -> return newTy
+                         Nothing -> do
+                           newRef <- JTRigid vr . S.fromList <$> lift (lookupConstraintsList vr)
+                           put $ M.insert ref newRef m
+                           return newRef
+      go x = composOpM go x
+
+--only works on resolved types
+checkEscapedVars :: [VarRef] -> JType -> TMonad ()
+checkEscapedVars vrs t = trace (show (vrs, t)) $ go t
+    where
+      vs = S.fromList $ map snd vrs
+      go t@(JTRigid (_,ref) _)
+          | ref `S.member` vs = tyErr1 "Qualified var escapes into environment" t
+          | otherwise = return ()
+      go x = composOpM_ go x
 
 -- Subtyping
 (<:) :: JType -> JType -> TMonad ()
@@ -484,48 +570,46 @@ x <: y = do
      yt <- resolveTypeShallow y
      if xt == yt
         then return ()
-        else go xt yt
+        else go xt yt `withContext` (do
+                                      xt <- prettyType x
+                                      yt <- prettyType y
+                                      return $ "When applying subtype constraint: " ++ xt ++ " <: " ++ yt)
   where
 
-    -- \/ a. t <: v --> [t] <: v
-    --handle freevars that are FreshVars
-
-
-    -- v <: \/ a. t --> v <: t[a:=x], x not in conclusion
-{-
-    go xt (JTForall vars t) = do
-           t' <- instantiateScheme vars t
-           go xt t'
--}
     go _ JTStat = return ()
+
     go xt@(JTFree ref) yt@(JTFree ref2) = addConstraint ref  (Sub yt) >>
                                           addConstraint ref2 (Super xt)
+
     go (JTFree ref) yt = addConstraint ref (Sub yt)
     go xt (JTFree ref) = addConstraint ref (Super xt)
 
-{-
-    --this is totally wrong
+    --above or below jtfrees ?
+
+    -- v <: \/ a. t --> v <: t[a:=x], x not in conclusion
     go xt yt@(JTForall vars t) = do
-           (t',fts) <- withLocalScope $ instantiateScheme vars t
-           --freeze the vars. if vars are frozen, can't be constrained with *new* constraints, but existing constraints can be checked, new constraints added elsewhere
+           t' <- instantiateRigidScheme vars t
            go xt t'
+           checkEscapedVars vars =<< resolveType xt
            --then check that no fresh types appear in xt
 
+    -- \/ a. t <: v --> [t] <: v
     go (JTForall vars t) yt = do
            t' <- instantiateScheme vars t
            go t' yt
--}
 
     go xt@(JTFunc argsx retx) yt@(JTFunc argsy rety) = do
            -- TODO: zipWithM_ (<:) (appArgst ++ repeat JTStat) argst -- handle empty args cases
-           when (length argsy < length argsx) $ tyErr2 "Couldn't subtype" xt yt
+           when (length argsy < length argsx) $ tyErr2Sub xt yt
            zipWithM_ (<:) argsy argsx -- functions are contravariant in argument type
            retx <: rety -- functions are covariant in return type
     go (JTList xt) (JTList yt) = xt <: yt
     go (JTMap xt) (JTMap yt) = xt <: yt
     go (JTRecord xm) (JTRecord ym)
-        | ym `M.isProperSubmapOf` xm = intersectionWithM (<:) xm ym >> return ()
-    go xt yt = tyErr2 "Couldn't subtype" xt yt
+        | M.isSubmapOfBy (\_ _ -> True) ym xm = intersectionWithM (<:) xm ym >> return ()
+    go xt yt = tyErr2Sub xt yt
+
+x <<:> y = join $ liftA2 (<:) x y
 
 someUpperBound :: [JType] -> TMonad JType
 someUpperBound [] = return JTStat
@@ -571,25 +655,22 @@ instance JTypeCheck JExpr where
                             et <- typecheck e
                             e1t <- typecheck e1
                             et =.= e1t
-                   -- equality means typechecking subtypes in both directions
         | s `elem` ["||","&&"] = setFixed JTBool >> return JTBool
         | otherwise = throwError $ "Unhandled operator: " ++ s
         where setFixed t = do
-                  (<: t) =<< typecheck e
-                  (<: t) =<< typecheck e1
+                  typecheck e  <<:> return t
+                  typecheck e1 <<:> return t
 
     typecheck (PostExpr _ e) = case e of
                                  (SelExpr _ _) -> go
                                  (ValExpr (JVar _)) -> go
                                  (IdxExpr _ _) -> go
                                  _ -> tyErr1 "Value not compatible with postfix assignment" =<< typecheck e
-        where go = ((<: JTNum) =<< typecheck e) >> return JTNum
+        where go = (typecheck e <<:> return JTNum) >> return JTNum
 
     typecheck (IfExpr e e1 e2) = do
-                            (<: JTBool) =<< typecheck e
-                            t1 <- typecheck e1
-                            t2 <- typecheck e2
-                            someUpperBound [t1,t2] --t1 /\ t2
+                            typecheck e <<:> return JTBool
+                            join $ liftA2 (\x y -> someUpperBound [x,y]) (typecheck e1) (typecheck e2)
 
     typecheck (NewExpr e) = undefined --yipe
 
@@ -614,13 +695,12 @@ instance JTypeCheck JExpr where
     typecheck (UnsatExpr _) = undefined --saturate (avoiding creation of existing ids) then typecheck
     typecheck (AntiExpr s) = fail $ "Antiquoted expression not provided with explicit signature: " ++ show s
 
-    --TODO: if we're typechecking a function, we can force the type inside the function args
+    --TODO: if we're typechecking a function, we can assign the types of the args to the given args
     typecheck (TypeExpr forceType e t)
               | forceType = integrateLocalType t
               | otherwise = do
-                            t2 <- typecheck e
                             t1 <- integrateLocalType t
-                            t2 <: t1
+                            typecheck e <<:> return t1
                             return t1
 
 instance JTypeCheck JVal where
@@ -637,8 +717,7 @@ instance JTypeCheck JVal where
     typecheck (JList xs) = typecheck (JHash $ M.fromList $ zip (map show [0..]) xs)
                            -- fmap JTList . someUpperBound =<< mapM typecheck xs
     typecheck (JRegEx _) = undefined --regex object
-    typecheck (JHash mp) = JTRecord . M.fromList <$> mapM go (M.toList mp)
-        where go (n,v) = (\x -> (n,x)) <$> typecheck v
+    typecheck (JHash mp) = JTRecord <$> T.mapM typecheck mp
     typecheck (JFunc args body) = do
                            ((argst',res'), frame) <- withLocalScope $ do
                                            argst <- mapM newVarDecl args
@@ -669,12 +748,10 @@ instance JTypeCheck JStat where
     typecheck (DeclStat ident (Just t)) = integrateLocalType t >>= addEnv ident >> return JTStat
     typecheck (ReturnStat e) = typecheck e
     typecheck (IfStat e s s1) = do
-                            (<: JTBool) =<< typecheck e
-                            t <- typecheck s
-                            t1 <- typecheck s1
-                            someUpperBound [t,t1] --t /\ t1
+                            typecheck e <<:> return JTBool
+                            join $ liftA2 (\x y -> someUpperBound [x,y]) (typecheck s) (typecheck s1)
     typecheck (WhileStat e s) = do
-                            (<: JTBool) =<< typecheck e
+                            typecheck e <<:> return JTBool
                             typecheck s
     typecheck (ForInStat _ _ _ _) = undefined -- yipe!
     typecheck (SwitchStat e xs d) = undefined -- check e, unify e with firsts, check seconds, take glb of seconds
@@ -689,147 +766,11 @@ instance JTypeCheck JStat where
     typecheck (ApplStat args body) = typecheck (ApplExpr args body) >> return JTStat
     typecheck (PostStat s e) = typecheck (PostExpr s e) >> return JTStat
     typecheck (AssignStat e e1) = do
-                            t <- typecheck e
-                            t1 <- typecheck e1
-                            t1 <: t
+                            typecheck e1 <<:> typecheck e
                             return JTStat
     typecheck (UnsatBlock _) = undefined --oyvey
     typecheck (AntiStat _) = undefined --oyvey
     typecheck BreakStat = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
 
-typecheckWithBlock stat = typecheck stat `catchError` \ e -> throwError $ e ++ "\nIn statement:\n" ++ renderStyle (style {mode = OneLineMode}) (renderJs stat)
-{-
-data JType = JTNum
-           | JTString
-           | JTBool
-           | JTStat
-           | JTFunc [JType] (JType)
-           | JTList JType --default case is tuple, type sig for list. tuples with <>
-           | JTMap  JType
-           | JTRecord VarRef [(String, JType)]
-           | JTFree VarRef
-             deriving (Eq, Ord, Read, Show, Typeable, Data)
--}
-
-{-
-    -- | Values
-data JVal = JVar     Ident
-          | JDouble  Double
-          | JInt     Integer
-          | JStr     String
-          | JList    [JExpr]
-          | JRegEx   String
-          | JHash    (M.Map String JExpr)
-          | JFunc    [Ident] JStat
-          | UnsatVal (State [Ident] JVal)
-            deriving (Eq, Ord, Show, Data, Typeable)
--}
-
-{-
-data JExpr = ValExpr    JVal
-           | SelExpr    JExpr Ident
-           | IdxExpr    JExpr JExpr
-           | InfixExpr  String JExpr JExpr
-           | PostExpr   String JExpr
-           | IfExpr     JExpr JExpr JExpr
-           | NewExpr    JExpr
-           | ApplExpr   JExpr [JExpr]
-           | UnsatExpr  (State [Ident] JExpr)
-           | AntiExpr   String
-             deriving (Eq, Ord, Show, Data, Typeable)
--}
-
-{-
---greatest lower bound
--- glb {a:Num} {b:Num} = {a:Num,b:Num}
-x \/ y = do
-     xt <- resolveType x
-     yt <- resolveType y
-     if xt == yt
-       then return xt
-       else go xt yt
-  where
-    go xt@(JTFree _) yt = do
-           ret <- newVarRef
-           addConstraint ret (GLB (S.fromList [xt,yt]))
-           return (JTFree ret)
-    go xt yt@(JTFree _) = go yt xt
-    go xt@(JTFunc argsx retx) yt@(JTFunc argsy rety) =
-           JTFunc <$> zipWithM (/\) argsx argsy <*> go retx rety
-    go (JTList xt) (JTList yt) = JTList <$> go xt yt
-    go (JTMap xt) (JTMap yt) = JTMap <$> go xt yt
-    go (JTRecord xm) (JTRecord ym) =
-        JTRecord <$> T.sequence (M.unionWith (\xt yt -> join $ liftM2 go xt yt) (M.map return xm) (M.map return ym))
-    go xt yt
-        | xt == yt = return xt
-        | otherwise = return JTImpossible
-
---this can be optimized. split out the free vars, glb the rest, then return a single glb set
-glball :: [JType] -> TMonad JType
-glball (h:xs) = do
-  foldM (\x y -> x \/ y) h xs
-glball [] = return JTImpossible
-
---least upper bound
---lub {a:Num} {a:Num,b:Int} = {a:Num}
-x /\ y = do
-     xt <- resolveType x
-     yt <- resolveType y
-     if xt == yt
-       then return xt
-       else go xt yt
-  where
-    go xt@(JTFree _) yt = do
-           ret <- newVarRef
-           addConstraint ret (LUB (S.fromList [xt,yt]))
-           return (JTFree ret)
-    go xt yt@(JTFree _) = go yt xt
-    go xt@(JTFunc argsx retx) yt@(JTFunc argsy rety) =
-           JTFunc <$> zipWithOrIdM (\/) argsx argsy <*> go retx rety
-    go (JTList xt) (JTList yt) = JTList <$> go xt yt
-    go (JTMap xt) (JTMap yt) = JTMap <$> go xt yt
-    go (JTRecord xm) (JTRecord ym) = do
-        JTRecord <$> T.sequence (M.intersectionWith go xm ym)
-    go xt yt
-        | xt == yt = return xt
-        | otherwise = return JTStat
-
---this can be optimized. split out the free vars, lub the rest, then return a single lub set
-luball :: [JType] -> TMonad JType
-luball (h:xs) = do
-  foldM (\x y -> x /\ y) h xs
-luball [] = return JTStat
--}
-
-{-
-resolveConstraints :: Set Int -> TMonad ()
-resolveConstraints vrs = mapM_ (resolveConstraint vrs S.empty) $ S.toList vrs
-
-resolveConstraint :: Set Int -> Set Int -> Int -> TMonad ()
-resolveConstraint resolvable seen i
-    | i `S.member` seen = error "loop" -- not really
-    | i `S.member` resolvable = do
-             cs <- lookupConstraints (Nothing, i)
-             cs' <- mapM reduceConstraint $ S.toList cs
-             --now either resolve or error or set
-             return ()
-    | otherwise = return ()
-  where
-    reduceConstraint (Sub t) = Sub <$> (resolveConstrainedType <=< resolveType) t
-    reduceConstraint (Super t) = Super <$> (resolveConstrainedType <=< resolveType) t
---    reduceConstraint (GLB s) = GLB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
---    reduceConstraint (LUB s) = LUB . S.fromList <$> mapM (resolveConstrainedType <=< resolveType) (S.toList s)
-
-    resolveConstrainedType x = go x
-        where go t@(JTFree _) = do
-                t' <- resolveType t
-                case t' of
-                  (JTFree (_,v)) -> do
-                                  resolveConstraint resolvable (S.insert i seen) v
-                                  resolveType t'
-                  _ -> composOpM go t'
-              go x = composOpM go x
---func
---record
--}
+typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ renderStyle (style {mode = OneLineMode}) (renderJs stat))

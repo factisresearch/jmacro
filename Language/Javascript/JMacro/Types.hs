@@ -18,6 +18,7 @@ import qualified Text.ParserCombinators.Parsec.Token as P
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Map (Map)
+import Data.Set (Set)
 import Data.Generics
 import Data.Typeable
 
@@ -33,6 +34,7 @@ data JType = JTNum
            | JTList JType
            | JTMap  JType
            | JTRecord (Map String JType)
+           | JTRigid VarRef (Set Constraint)
            | JTImpossible
            | JTFree VarRef
            | JTForall [VarRef] JType
