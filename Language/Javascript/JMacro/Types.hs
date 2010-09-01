@@ -9,18 +9,14 @@ import Data.Char
 import Data.Maybe(fromMaybe)
 
 import Text.ParserCombinators.Parsec
-import Text.ParserCombinators.Parsec.Expr
-import Text.ParserCombinators.Parsec.Error
 import Text.Parsec.Prim hiding (runParser, try)
 import Text.ParserCombinators.Parsec.Language(emptyDef)
 import qualified Text.ParserCombinators.Parsec.Token as P
 
-import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Map (Map)
 import Data.Set (Set)
 import Data.Generics
-import Data.Typeable
 
 type VarRef = (Maybe String, Int)
 
@@ -107,9 +103,10 @@ constraintHead = parens go <|> go
     where go = commaSep1 constraint
           constraint = do
             r <- freeVarRef =<< identifier
-            reservedOp "<:"
+            c <- (reservedOp "<:" >> (return Sub)) <|>
+                 (reservedOp ":>" >> (return Super)) 
             t <- anyType
-            return $ (r, Sub t)
+            return $ (r, c t)
 
 anyType :: TypeParser JType
 anyType = try (parens anyType) <|> funOrAtomType <|> listType <|> recordType

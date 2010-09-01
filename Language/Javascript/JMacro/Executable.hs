@@ -27,6 +27,6 @@ main = do
 
     fixIdent x = fromMC $ composOp go (toMC x) :: JStat
         where go v = case v of
-                       (MStat (DeclStat (StrI ('!':'!':i')))) -> MStat (DeclStat (StrI i'))
-                       (MStat (DeclStat (StrI ('!':i')))) -> MStat (DeclStat (StrI i'))
+                       (MStat (DeclStat (StrI ('!':'!':i')) t)) -> MStat (DeclStat (StrI i') t)
+                       (MStat (DeclStat (StrI ('!':i')) t)) -> MStat (DeclStat (StrI i') t)
                        _ -> composOp go v
