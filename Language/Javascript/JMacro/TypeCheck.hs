@@ -246,12 +246,17 @@ partitionCs (Super t:cs) = (subs,t:sups)
 --add mutation
 lookupConstraintsList :: VarRef -> TMonad [Constraint]
 lookupConstraintsList vr@(_,ref) = do
-  vars <- tc_vars <$> get
-  case M.lookup ref vars of
-    (Just (SVConstrained cs)) -> nub <$> mapM (mapConstraint resolveType) (S.toList cs)
-    (Just (SVType t)) -> tyErr1 "lookupConstraints on instantiated type" t
-    Nothing -> return []
+    vars <- tc_vars <$> get
+    case M.lookup ref vars of
+      (Just (SVConstrained cs)) -> filter notLoop . nub <$> mapM (mapConstraint resolveType) (S.toList cs)
+      (Just (SVType t)) -> tyErr1 "lookupConstraints on instantiated type" t
+      Nothing -> return []
+  where
+    notLoop (Super (JTFree (_,ref'))) | ref == ref' = False
+    notLoop (Sub   (JTFree (_,ref'))) | ref == ref' = False
+    notLoop _ = True
 
+-- if we instantiate a var to itself, then there's a good chance this results from a looping constraint -- we should be helpful and get rid of any such constraints.
 instantiateVarRef :: VarRef -> JType -> TMonad ()
 instantiateVarRef vr@(_,ref) (JTFree (_,ref')) | ref == ref' = do
     cs <- lookupConstraintsList vr
@@ -261,10 +266,17 @@ instantiateVarRef vr@(_,ref) (JTFree (_,ref')) | ref == ref' = do
         simplify (Super (JTFree (_,r)):cs) | r == ref = cs
         simplify (c:cs) = c : simplify cs
         simplify x = x
+
 instantiateVarRef vr@(_,ref) t = do
+  occursCheck ref t
   cs <- lookupConstraintsList vr
   modify (\s -> s {tc_vars = M.insert ref (SVType t) (tc_vars s)})
   checkConstraints t cs
+
+occursCheck :: Int -> JType -> TMonad ()
+occursCheck ref (JTFree (_,i))
+  | i == ref = tyErr1 "Occurs check: cannot construct infinite type" (JTFree (Nothing,i))
+occursCheck ref x = trace ("oc: " ++ show (x,ref)) $ composOpM_ (occursCheck ref) x
 
 checkConstraints :: JType -> [Constraint] -> TMonad ()
 checkConstraints t cs = mapM_ go cs
@@ -279,13 +291,14 @@ addConstraint vr@(_,ref) c = case c of
                   JTForall vars t -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
 
                   JTFunc args res -> do
+                         mapM_ (occursCheck ref) (res:args)
                          args' <- mapM (const newTyVar) args
                          res'  <- newTyVar
                          zipWithM_ (<:) args args' --contravariance
                          res' <: res
                          instantiateVarRef vr $ JTFunc args' res'
 
-                  JTRecord m -> addRecConstraint (Left m)
+                  JTRecord m -> F.mapM_ (occursCheck ref) m >> addRecConstraint (Left m)
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -315,13 +328,14 @@ addConstraint vr@(_,ref) c = case c of
                   JTForall vars t -> normalizeConstraints . (c : ) =<< lookupConstraintsList vr
 
                   JTFunc args res -> do
+                         mapM_ (occursCheck ref) (res:args)
                          args' <- mapM (const newTyVar) args
                          res'  <- newTyVar
                          zipWithM_ (<:) args' args --contravariance
                          res <: res'
                          instantiateVarRef vr $ JTFunc args' res'
 
-                  JTRecord m -> addRecConstraint (Right m)
+                  JTRecord m -> F.mapM_ (occursCheck ref) m >> addRecConstraint (Right m)
 
                   JTList t' -> do
                          vr' <- newVarRef
@@ -361,16 +375,6 @@ addConstraint vr@(_,ref) c = case c of
           where go (Super (JTRecord m)) = Just m
                 go _ = Nothing
 
-      findForallSubs cs = partitionOut go cs
-          where go (Sub (JTForall vars t)) = Just (vars,t)
-                go (Sub x) = Just ([],x)
-                go _ = Nothing
-
-      findForallSups cs = partitionOut go cs
-          where go (Super (JTForall vars t)) = Just (vars,t)
-                go (Super x) = Just ([],x)
-                go _ = Nothing
-
       --left is sub, right is super
       --There really should be at most one existing sub and sup constraint
       addRecConstraint eM = do
@@ -400,54 +404,70 @@ addConstraint vr@(_,ref) c = case c of
           _ -> return restCs'
 
       --There really should be at most one existing sub and sup constraint
-      normalizeConstraints constraintList = do
+      normalizeConstraints cl = putCs =<< cannonicalizeConstraints cl
+
+
+cannonicalizeConstraints constraintList = do
         let (subs,restCs)  = findForallSubs constraintList
             (sups,restCs') = findForallSups restCs
-            mergeSubs [] = return Nothing
-            mergeSubs [([],t)] = return $ Just $ t
-            mergeSubs [s] = return $ Just $ uncurry JTForall s
-            mergeSubs ss = do
-              rt <- newTyVar
-              (_,frame) <- withLocalScope $ mapM (\s -> return rt <<:> uncurry instantiateScheme s) ss
-              -- set those not in both head and tail frozen
 
-              rt' <- resolveType rt
-              case rt' of
-                (JTFunc args res) -> do
-                     freeVarsInArgs <- S.unions <$> mapM freeVars args
-                     freeVarsInRes  <- freeVars res
-                     setFrozen $ frame `S.difference` (freeVarsInArgs `S.intersection` freeVarsInRes)
-                _ -> setFrozen frame
-              tryCloseFrozenVars
-              Just <$> resolveType (JTForall (frame2VarRefs frame) rt')
-
-            mergeSups [] = return Nothing
-            mergeSups [([],t)] = return $ Just $ t
-            mergeSups [s] = return $ Just $ uncurry JTForall s
-            mergeSups ss = do
-              rt <- newTyVar
-              (_,frame) <- withLocalScope $ mapM (\s -> uncurry instantiateScheme s <<:> return rt) ss
-
-              rt' <- resolveType rt
-              case rt' of
-                (JTFunc args res) -> do
-                     freeVarsInArgs <- S.unions <$> mapM freeVars args
-                     freeVarsInRes  <- freeVars res
-                     setFrozen $ frame `S.difference` (freeVarsInArgs `S.intersection` freeVarsInRes)
-                _ -> setFrozen frame
-              tryCloseFrozenVars
-              Just <$> resolveType (JTForall (frame2VarRefs frame) rt')
-
+        trace ("cl: " ++ show (sups, subs)) $ return ()
         mbSub <- mergeSubs subs
         mbSup <- mergeSups sups
 
         case (mbSub, mbSup) of
           (Just sub, Just sup) -> do
             sup <: sub
-            putCs $ Sub sub : Super sup : restCs'
-          (Just sub, Nothing)  -> putCs $ Sub sub : restCs'
-          (Nothing , Just sup) -> putCs $ Super sup : restCs'
-          _ -> return ()
+            return $ Sub sub : Super sup : restCs'
+          (Just sub, Nothing)  -> return $ Sub sub : restCs'
+          (Nothing , Just sup) -> return $ Super sup : restCs'
+          _ -> return restCs'
+  where
+    findForallSubs cs = partitionOut go cs
+      where go (Sub (JTForall vars t)) = Just (vars,t)
+            go (Sub (JTFree _)) = Nothing
+            go (Sub x) = Just ([],x)
+            go _ = Nothing
+
+    findForallSups cs = partitionOut go cs
+      where go (Super (JTForall vars t)) = Just (vars,t)
+            go (Super (JTFree _)) = Nothing
+            go (Super x) = Just ([],x)
+            go _ = Nothing
+
+    mergeSubs [] = return Nothing
+    mergeSubs [([],t)] = return $ Just $ t
+    mergeSubs [s] = return $ Just $ uncurry JTForall s
+    mergeSubs ss = do
+      rt <- newTyVar
+      (_,frame) <- withLocalScope $ mapM (\s -> return rt <<:> uncurry instantiateScheme s) ss
+      -- set those not in both head and tail frozen
+      rt' <- resolveType rt
+      case rt' of
+        (JTFunc args res) -> do
+          freeVarsInArgs <- S.unions <$> mapM freeVars args
+          freeVarsInRes  <- freeVars res
+          setFrozen $ frame `S.difference` (freeVarsInArgs `S.intersection` freeVarsInRes)
+        _ -> setFrozen frame
+      -- tryCloseFrozenVars
+      Just <$> resolveType (JTForall (frame2VarRefs frame) rt')
+
+    mergeSups [] = return Nothing
+    mergeSups [([],t)] = return $ Just $ t
+    mergeSups [s] = return $ Just $ uncurry JTForall s
+    mergeSups ss = do
+      rt <- newTyVar
+      (_,frame) <- withLocalScope $ mapM (\s -> uncurry instantiateScheme s <<:> return rt) ss
+      rt' <- resolveType rt
+      case rt' of
+        (JTFunc args res) -> do
+          freeVarsInArgs <- S.unions <$> mapM freeVars args
+          freeVarsInRes  <- freeVars res
+          setFrozen $ frame `S.difference` (freeVarsInArgs `S.intersection` freeVarsInRes)
+        _ -> setFrozen frame
+      -- tryCloseFrozenVars
+      Just <$> resolveType (JTForall (frame2VarRefs frame) rt')
+
 
 --TODO use reader instead of state
 tryCloseFrozenVars :: TMonad ()
@@ -469,7 +489,13 @@ tryCloseFrozenVars = evalStateT (mapM_ go =<< getFrozen) []
                      l <- tryClose vr
                      case l of
                        [] -> return ()
-                       cl -> mapM_ (go' vr) cl -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
+                       cl -> do
+                         --somewhere around here we need to recannonicalize...
+                         trace ("cl: " ++ show cl) $ return () -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
+                         mapM_ (go' vr) cl
+                         cl' <- lift (mapM (mapConstraint resolveType) cl)
+                         trace ("cl': " ++ show cl') $ return () -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
+                         --if cl remains free, recannonicalize it
                 _ -> return ()
       -- Left is super, right is sub
       go' (_,ref) (Sub (JTFree (_,i)))
@@ -500,7 +526,7 @@ tryCloseFrozenVars = evalStateT (mapM_ go =<< getFrozen) []
       findLoop i [] = Nothing
 
       tryClose vr = lift $ do
-        cl <- lookupConstraintsList vr
+        cl <- cannonicalizeConstraints =<< lookupConstraintsList vr
         case partitionCs cl of
           (_,[s]) -> instantiateVarRef vr s >> return [] -- prefer lower bound (supertype constraint)
           ([s],_) -> instantiateVarRef vr s >> return []
@@ -666,6 +692,7 @@ checkEscapedVars vrs t = go t
 x <: y = do
      xt <- resolveTypeShallow x --shallow because subtyping can close
      yt <- resolveTypeShallow y
+     trace ("sub : " ++ show xt ++ ", " ++ show yt) $ return ()
      if xt == yt
         then return ()
         else go xt yt `withContext` (do
