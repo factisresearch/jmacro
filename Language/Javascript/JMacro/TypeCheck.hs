@@ -445,16 +445,17 @@ cannonicalizeConstraints constraintList = do
     mergeSubs [s] = return $ Just $ uncurry JTForall s
     mergeSubs ss = do
       rt <- newTyVar
-      (instantiatedTypes,frame) <- withLocalScope $ mapM (uncurry instantiateScheme) ss
-      case findFuncs instantiatedTypes of
-        (funcTypes,[]) -> do
+      (_,frame) <- withLocalScope $ do
+          instantiatedTypes <- mapM (uncurry instantiateScheme) ss
+          let (funcTypes, otherTypes) = findFuncs instantiatedTypes
+          when (not . null $ funcTypes) $ do
                      let (argss,rets) = unzip funcTypes
                          lft = length funcTypes
                      args' <- mapM someUpperBound $ filter ((== lft) . length) $ transpose argss
                      ret'  <- someLowerBound rets
                      rt <: JTFunc args' ret'
-        ([],otherTypes) -> mapM_ (rt <:) otherTypes
-        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Subtype Constraints" "Subtype constraint" "Subtype constraint" (JTFunc args' ret') o
+          mapM_ (rt <:) otherTypes
+--        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Subtype Constraints" "Subtype constraint" "Subtype constraint" (JTFunc args' ret') o
       rt' <- resolveType rt
       case rt' of
         (JTFunc args res) -> do
@@ -470,15 +471,16 @@ cannonicalizeConstraints constraintList = do
     mergeSups [s] = return $ Just $ uncurry JTForall s
     mergeSups ss = do
       rt <- newTyVar
-      (instantiatedTypes,frame) <- withLocalScope $ mapM (uncurry instantiateScheme) ss
-      case findFuncs instantiatedTypes of
-        (funcTypes,[]) -> do
+      (_,frame) <- withLocalScope $ do
+           instantiatedTypes <- mapM (uncurry instantiateScheme) ss
+           let (funcTypes, otherTypes) = findFuncs instantiatedTypes
+           when (not . null $ funcTypes) $ do
                      let (argss,rets) = unzip funcTypes
                      args' <- mapM someLowerBound $ transpose argss
                      ret'  <- someUpperBound rets
                      rt <: JTFunc args' ret'
-        ([],otherTypes) -> mapM_ (<: rt) otherTypes
-        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Supertype Constraints" "Supertype constraint" "Supertype constraint" (JTFunc args' ret') o
+           mapM_ (<: rt) otherTypes
+--        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Supertype Constraints" "Supertype constraint" ("Supertype constraint" ++ show o) (JTFunc args' ret') o
       rt' <- resolveType rt
 
       case rt' of
@@ -491,10 +493,15 @@ cannonicalizeConstraints constraintList = do
       Just <$> resolveType (JTForall (frame2VarRefs frame) rt')
 
 
---TODO use reader instead of state
 tryCloseFrozenVars :: TMonad ()
-tryCloseFrozenVars = runReaderT (mapM_ go =<< getFrozen) []
+tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
     where
+      loop frozen = do
+        mapM_ go $ S.toList frozen
+        newFrozen <- tc_frozen <$> lift get
+        if S.null (newFrozen  `S.difference` frozen)
+           then return ()
+           else loop newFrozen
       go :: Int -> ReaderT [Either Int Int] TMonad ()
       go i = do
         s <- ask
@@ -553,9 +560,6 @@ tryCloseFrozenVars = runReaderT (mapM_ go =<< getFrozen) []
           (_,[s]) -> instantiateVarRef vr s >> return [] -- prefer lower bound (supertype constraint)
           ([s],_) -> instantiateVarRef vr s >> return []
           _ -> return cl
-
-      getFrozen :: ReaderT [Either Int Int] TMonad [Int]
-      getFrozen = S.toList . tc_frozen <$> lift get
 
 -- Manipulating the environment
 withLocalScope :: TMonad a -> TMonad (a, Set Int)
@@ -864,8 +868,8 @@ instance JTypeCheck JVal where
     typecheck (JHash mp) = do
       mp' <- T.mapM typecheck mp
       t <- if M.null mp'
-             then someUpperBound $ M.elems mp'
-             else return JTImpossible
+             then return JTImpossible
+             else someUpperBound $ M.elems mp'
       return $ JTRecord t mp'
     typecheck (JFunc args body) = do
           ((argst',res'), frame) <- withLocalScope $ do
