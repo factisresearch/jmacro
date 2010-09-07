@@ -16,7 +16,7 @@ import Control.Monad.Error
 import Data.Either
 import Data.Map (Map)
 import Data.Maybe(catMaybes, fromMaybe)
-import Data.List(intercalate, nub)
+import Data.List(intercalate, nub, transpose)
 import qualified Data.Traversable as T
 import qualified Data.Foldable as F
 import qualified Data.Map as M
@@ -290,11 +290,7 @@ addConstraint vr@(_,ref) c = case c of
 
                   JTFunc args res -> do
                          mapM_ (occursCheck ref) (res:args)
-                         args' <- mapM (const newTyVar) args
-                         res'  <- newTyVar
-                         zipWithM_ (<:) args args' --contravariance
-                         res' <: res
-                         instantiateVarRef vr $ JTFunc args' res'
+                         normalizeConstraints . (c :) =<< lookupConstraintsList vr
 
                   JTRecord t m -> occursCheck ref t >>
                                   F.mapM_ (occursCheck ref) m >>
@@ -329,11 +325,7 @@ addConstraint vr@(_,ref) c = case c of
 
                   JTFunc args res -> do
                          mapM_ (occursCheck ref) (res:args)
-                         args' <- mapM (const newTyVar) args
-                         res'  <- newTyVar
-                         zipWithM_ (<:) args' args --contravariance
-                         res <: res'
-                         instantiateVarRef vr $ JTFunc args' res'
+                         normalizeConstraints . (c :) =<< lookupConstraintsList vr
 
                   JTRecord t m -> occursCheck ref t >>
                                   F.mapM_ (occursCheck ref) m >>
@@ -431,6 +423,7 @@ cannonicalizeConstraints constraintList = do
           (Nothing , Just sup) -> return $ Super sup : restCs'
           _ -> return restCs'
   where
+
     findForallSubs cs = partitionOut go cs
       where go (Sub (JTForall vars t)) = Just (vars,t)
             go (Sub (JTFree _)) = Nothing
@@ -443,12 +436,25 @@ cannonicalizeConstraints constraintList = do
             go (Super x) = Just ([],x)
             go _ = Nothing
 
+    findFuncs cs = partitionOut go cs
+        where go (JTFunc args ret) = Just (args, ret)
+              go _ = Nothing
+
     mergeSubs [] = return Nothing
     mergeSubs [([],t)] = return $ Just $ t
     mergeSubs [s] = return $ Just $ uncurry JTForall s
     mergeSubs ss = do
       rt <- newTyVar
-      (_,frame) <- withLocalScope $ mapM (\s -> return rt <<:> uncurry instantiateScheme s) ss
+      (instantiatedTypes,frame) <- withLocalScope $ mapM (uncurry instantiateScheme) ss
+      case findFuncs instantiatedTypes of
+        (funcTypes,[]) -> do
+                     let (argss,rets) = unzip funcTypes
+                         lft = length funcTypes
+                     args' <- mapM someUpperBound $ filter ((== lft) . length) $ transpose argss
+                     ret'  <- someLowerBound rets
+                     rt <: JTFunc args' ret'
+        ([],otherTypes) -> mapM_ (rt <:) otherTypes
+        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Subtype Constraints" "Subtype constraint" "Subtype constraint" (JTFunc args' ret') o
       rt' <- resolveType rt
       case rt' of
         (JTFunc args res) -> do
@@ -464,11 +470,17 @@ cannonicalizeConstraints constraintList = do
     mergeSups [s] = return $ Just $ uncurry JTForall s
     mergeSups ss = do
       rt <- newTyVar
-      trace "hi" $ return ()
-      (_,frame) <- withLocalScope $ mapM (\s -> uncurry instantiateScheme s <<:> return rt) ss
-      --to change -- really do each side at a time rather than all at once...
-      trace "hiya" $ return ()
+      (instantiatedTypes,frame) <- withLocalScope $ mapM (uncurry instantiateScheme) ss
+      case findFuncs instantiatedTypes of
+        (funcTypes,[]) -> do
+                     let (argss,rets) = unzip funcTypes
+                     args' <- mapM someLowerBound $ transpose argss
+                     ret'  <- someUpperBound rets
+                     rt <: JTFunc args' ret'
+        ([],otherTypes) -> mapM_ (<: rt) otherTypes
+        ((args',ret'):_,o:_) -> tyErr2ext "Incompatible Supertype Constraints" "Supertype constraint" "Supertype constraint" (JTFunc args' ret') o
       rt' <- resolveType rt
+
       case rt' of
         (JTFunc args res) -> do
           freeVarsInArgs <- S.unions <$> mapM freeVars args
@@ -544,14 +556,6 @@ tryCloseFrozenVars = runReaderT (mapM_ go =<< getFrozen) []
 
       getFrozen :: ReaderT [Either Int Int] TMonad [Int]
       getFrozen = S.toList . tc_frozen <$> lift get
-
-      withLocalState f x = do
-        s <- get
-        put (f s)
-        r <- x
-        put s
-        return r
-
 
 -- Manipulating the environment
 withLocalScope :: TMonad a -> TMonad (a, Set Int)
@@ -748,35 +752,21 @@ x <: y = do
 
 x <<:> y = join $ liftA2 (<:) x y
 
-x <:<< y = do
-  xt <- resolveTypeShallow =<< x
-  yt <- resolveTypeShallow =<< y
-  (case (xt,yt) of
-       (JTFree ref, JTFunc _ _) -> addConstraint ref (Sub $ JTForall [] yt)
-       (JTFunc _ _, JTFree ref) -> addConstraint ref (Super $ JTForall [] xt)
-       _ -> xt <: yt)
-     `withContext` (do
-                       xt <- prettyType xt
-                       yt <- prettyType yt
-                       return $ "When applying subtype constraint: " ++ xt ++ " <: " ++ yt)
-
-
 someUpperBound :: [JType] -> TMonad JType
 someUpperBound [] = return JTStat
--- someUpperBound [x] = return x
 someUpperBound xs = do
-  trace ("some up bnd: " ++ show xs) $ return ()
   res <- newTyVar
-  mapM_ (<: res) xs
-  return res
+  b <- (mapM_ (<: res) xs >> return True) `catchError` \e -> return False
+  if b then return res else return JTStat
 
 someLowerBound :: [JType] -> TMonad JType
 someLowerBound [] = return JTImpossible
--- someLowerBound [x] = return x
 someLowerBound xs = do
   res <- newTyVar
   mapM_ (res <:) xs
   return res
+--  b <- (mapM_ (res <:) xs >> return True) `catchError` \e -> return False
+--  if b then return res else return JTImpossible
 
 x =.= y = do
       x <: y
@@ -840,9 +830,7 @@ instance JTypeCheck JExpr where
                                         return rett
                                 go (JTFree vr) = do
                                         ret <- newTyVar
-                                        addConstraint vr (Sub (JTForall [] (JTFunc appArgst ret)))
-                                        --TODO check entailment -- i.e. when adding a constraint, see if addtl. constraints already entail it.
-                                        --et <: JTForall [] (JTFunc appArgst ret) --that's the gist, but not exactly it...
+                                        addConstraint vr (Sub (JTFunc appArgst ret))
                                         return ret
                                 go x = tyErr1 "Cannot apply value as function" x
                             go et
@@ -916,18 +904,7 @@ instance JTypeCheck JStat where
     typecheck (ApplStat args body) = typecheck (ApplExpr args body) >> return JTStat
     typecheck (PostStat s e) = typecheck (PostExpr s e) >> return JTStat
     typecheck (AssignStat e e1) = do
-      trace "yo" $ return ()
-      e1t <- typecheck e1
-      trace (show e1t) $ return ()
-
-      trace "yo2" $ return ()
-      et <- resolveType =<< typecheck e
-      trace (show et) $ return ()
-      return e1t <:<< return et
-      trace "blah" $ return ()
-        --typecheck e1 <:<< typecheck e
-      env <- prettyEnv
-      trace ("env: " ++ show env) $ return ()
+      typecheck e1 <<:> typecheck e
       return JTStat
     typecheck (UnsatBlock _) = undefined --oyvey
     typecheck (AntiStat _) = undefined --oyvey
