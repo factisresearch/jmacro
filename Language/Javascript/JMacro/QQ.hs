@@ -90,13 +90,21 @@ quoteJMExpE s = case parseJME s of
 antiIdent :: JMacro a => String -> a -> a
 antiIdent s e = fromMC $ go (toMC e)
     where go (MExpr (ValExpr (JVar (StrI s'))))
-             | s == s' = MExpr (AntiExpr s)
+             | s == s' = MExpr (AntiExpr $ fixIdent s)
           go (MExpr (SelExpr x i)) =
               MExpr (SelExpr (antiIdent s x) i)
           go x = composOp go x
 
 antiIdents :: JMacro a => [String] -> a -> a
 antiIdents ss x = foldr antiIdent x ss
+
+
+fixIdent css@(c:_)
+    | isUpper c = '_' : escapeDollar css
+    | otherwise = escapeDollar css
+  where
+    escapeDollar = map (\x -> if x =='$' then 'ǆ' else x)
+fixIdent _ = "_"
 
 
 jm2th :: Data a => a -> TH.ExpQ
@@ -138,11 +146,6 @@ jm2th v = dataToExpQ (const Nothing
 
                     blocks (x:xs) = jm2th x : blocks xs
 
-
-                    fixIdent css@(c:_)
-                        | isUpper c = '_' : css
-                        | otherwise = css
-                    fixIdent _ = "_"
 
 
           handleStat (ForInStat b (StrI i) e s) = Just $
