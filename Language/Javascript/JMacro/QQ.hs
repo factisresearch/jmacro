@@ -536,12 +536,14 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
     addNxt e = do
             nxt <- (Just <$> lookAhead anyChar <|> return Nothing)
             case nxt of
-              Just '.' -> addNxt =<< (dot >> (SelExpr e <$> ident'))
+              Just '.' -> addNxt =<< (dot >> (SelExpr e <$> (ident' <|> numIdent)))
               Just '[' -> addNxt =<< (IdxExpr e <$> brackets' expr)
               Just '(' -> addNxt =<< (ApplExpr e <$> args')
               Just '-' -> try (reservedOp "--" >> return (PostExpr "--" e)) <|> return e
               Just '+' -> try (reservedOp "++" >> return (PostExpr "++" e)) <|> return e
               _   -> return e
+
+    numIdent = StrI <$> many1 digit
 
     notExpr = try (symbol "!" >> dotExpr) >>= \e ->
               return (ApplExpr (ValExpr (JVar (StrI "!"))) [e])
