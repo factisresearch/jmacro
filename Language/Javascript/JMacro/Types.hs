@@ -29,7 +29,7 @@ data JType = JTNum
            | JTFunc [JType] (JType)
            | JTList JType
            | JTMap  JType
-           | JTRecord (Map String JType)
+           | JTRecord JType (Map String JType)
            | JTRigid VarRef (Set Constraint)
            | JTImpossible
            | JTFree VarRef
@@ -104,7 +104,7 @@ constraintHead = parens go <|> go
           constraint = do
             r <- freeVarRef =<< identifier
             c <- (reservedOp "<:" >> (return Sub)) <|>
-                 (reservedOp ":>" >> (return Super)) 
+                 (reservedOp ":>" >> (return Super))
             t <- anyType
             return $ (r, c t)
 
@@ -139,7 +139,7 @@ atomicType = do
     _ -> error "typeAtom"
 
 recordType :: TypeParser JType
-recordType = braces $ JTRecord . M.fromList <$> commaSep namePair
+recordType = braces $ JTRecord JTImpossible . M.fromList <$> commaSep namePair
     where namePair = do
             n <- identifier
             reservedOp "::"

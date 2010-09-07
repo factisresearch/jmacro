@@ -198,8 +198,8 @@ jm2th v = dataToExpQ (const Nothing
           handleStr x = Just $ TH.litE $ TH.StringL x
 
           handleTyp :: JType -> Maybe (TH.ExpQ)
-          handleTyp (JTRecord mp) = Just $
-                                    TH.appE (TH.varE $ mkName "jtFromList")
+          handleTyp (JTRecord t mp) = Just $
+                                    TH.appE (TH.appE (TH.varE $ mkName "jtFromList") (jm2th t))
                                           (jm2th $ M.toList mp)
 
           handleTyp _ = Nothing

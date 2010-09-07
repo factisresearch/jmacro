@@ -242,7 +242,7 @@ instance Compos JType where
           JTForall vars t -> ret JTForall `app` ret vars `app` f t
           JTList t -> ret JTList `app` f t
           JTMap t -> ret JTMap `app` f t
-          JTRecord m -> ret JTRecord `app` m'
+          JTRecord t m -> ret JTRecord `app` f t `app` m'
               where (ls,ts) = unzip $ M.toList m
                     m' = ret (M.fromAscList . zip ls) `app` mapM' f ts
           x -> ret x
@@ -500,7 +500,7 @@ instance JsToDoc JType where
                | otherwise = args
     jsToDoc (JTList t) = brackets $ jsToDoc t
     jsToDoc (JTMap t) = text "Map" <+> ppType t
-    jsToDoc (JTRecord mp) = braces (fsep . punctuate comma . map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp)
+    jsToDoc (JTRecord t mp) = braces (fsep . punctuate comma . map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp) <+> text "[" <> jsToDoc t <> text "]"
     jsToDoc (JTFree ref) = ppRef ref
     jsToDoc (JTRigid ref cs) = text "[" <> ppRef ref <> text "]"
 {-
@@ -689,8 +689,8 @@ jhAdd  k v m = M.insert k (toJExpr v) m
 jhFromList :: [(String, JExpr)] -> JVal
 jhFromList = JHash . M.fromList
 
-jtFromList :: [(String, JType)] -> JType
-jtFromList y = JTRecord $ M.fromList y
+jtFromList :: JType -> [(String, JType)] -> JType
+jtFromList t y = JTRecord t $ M.fromList y
 
 nullStat :: JStat
 nullStat = BlockStat []
