@@ -12,7 +12,7 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 -}
 -----------------------------------------------------------------------------
 
-module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM, jmacroE2) where
+module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding ((<|>),many,optional,(<*))
 import Control.Monad.State.Strict
@@ -48,15 +48,11 @@ import Debug.Trace
 
 -- | QuasiQuoter for a block of JMacro statements.
 jmacro :: QuasiQuoter
-jmacro = QuasiQuoter quoteJMExp quoteJMPat
+jmacro = QuasiQuoter {quoteExp = quoteJMExp, quotePat = quoteJMPat}
 
 -- | QuasiQuoter for a JMacro expression.
 jmacroE :: QuasiQuoter
-jmacroE = QuasiQuoter quoteJMExpE quoteJMPatE
-
--- | QuasiQuoter for a JMacro expression.
-jmacroE2 :: Int -> QuasiQuoter
-jmacroE2 x = QuasiQuoter quoteJMExpE quoteJMPatE
+jmacroE = QuasiQuoter {quoteExp = quoteJMExpE, quotePat = quoteJMPatE}
 
 quoteJMPat :: String -> TH.PatQ
 quoteJMPat s = case parseJM s of
