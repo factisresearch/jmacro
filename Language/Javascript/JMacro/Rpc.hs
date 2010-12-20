@@ -37,7 +37,10 @@ The jQuery Javascript library is used to handle ajax requests, and hence pages w
 -}
 
 module Language.Javascript.JMacro.Rpc (
-   mkWebRPC, asIO, Request, Response(..)
+  -- * API
+  mkWebRPC, asIO, Request, Response(..), WebRPCDesc,
+  -- * Helper Classes
+  CallWebRPC(..),ToWebRPC(..)
 ) where
 
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
@@ -54,7 +57,7 @@ type WebRPCDesc = (String, Request -> IO Response)
 -- | A String containing a json representation of function arguments encoded as a list of parameters. Generally would be passed as part of an HTTP request.
 type Request = String
 
--- | Either a success or failure (with code). Generally would be turned back into a propre HTTP response.
+-- | Either a success or failure (with code). Generally would be turned back into a proper HTTP response.
 data Response = GoodResponse String
               | BadResponse Int String
 
@@ -63,29 +66,29 @@ returnResp r = return $ GoodResponse (encode r)
 respCode c e = BadResponse c e
 badData e = return $ respCode 400 ("Bad Data format: " ++ e)
 
-class ToWebRPC_ a where
+class ToWebRPC a where
     toWebRPC_ :: a -> ([JSValue] -> IO Response)
 
-instance (JSON b) => ToWebRPC_ (IO b) where
+instance (JSON b) => ToWebRPC (IO b) where
     toWebRPC_ f _ =  returnResp =<< f
 
-instance (JSON a, ToWebRPC_ b) => ToWebRPC_ (a -> b) where
+instance (JSON a, ToWebRPC b) => ToWebRPC (a -> b) where
     toWebRPC_ f (x:xs) = case readJSON x of
                            Ok v -> toWebRPC_ (f v) xs
                            Error s -> badData s
     toWebRPC_ _ _ = badData "missing parameter"
 
-toWebRPC :: ToWebRPC_ a => a -> Request -> IO Response
+toWebRPC :: ToWebRPC a => a -> Request -> IO Response
 toWebRPC f = \req -> case runGetJSON readJSArray req of
                        (Right (JSArray xs)) ->f' xs
                        (Left e) -> badData e
                        _ -> badData "toWebRPC error"
     where f' = toWebRPC_ f
 
-class CallWebRPC_ a b | a -> b where
+class CallWebRPC a b | a -> b where
     callWebRPC_ :: [JExpr] -> String -> a -> b
 
-instance CallWebRPC_ (IO b) JExpr where
+instance CallWebRPC (IO b) JExpr where
     callWebRPC_ xs serverLoc _ =
         [$jmacroE|
          (\() { var res;
@@ -100,14 +103,14 @@ instance CallWebRPC_ (IO b) JExpr where
                 return res;
                }())|]
 
-instance (CallWebRPC_ b c, ToJExpr d) => CallWebRPC_ (a -> b) (d -> c) where
+instance (CallWebRPC b c, ToJExpr d) => CallWebRPC (a -> b) (d -> c) where
     callWebRPC_ xs serverLoc f = \x -> callWebRPC_ (toJExpr x : xs) serverLoc (f undefined)
 
-callWebRPC :: (CallWebRPC_ a b) => String -> a -> b
+callWebRPC :: (CallWebRPC a b) => String -> a -> b
 callWebRPC s f = callWebRPC_ [] s f
 
 -- | Produce a pair of (ServerFunction, ClientFunction) from a function in IO
-mkWebRPC :: (ToWebRPC_ a, CallWebRPC_ a b) => String -> a -> (WebRPCDesc, String -> b)
+mkWebRPC :: (ToWebRPC a, CallWebRPC a b) => String -> a -> (WebRPCDesc, String -> b)
 mkWebRPC name rpcFun = ((name,toWebRPC rpcFun), \server -> callWebRPC (server ++ "/" ++ name) rpcFun)
 
 
