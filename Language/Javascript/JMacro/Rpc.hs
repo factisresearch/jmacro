@@ -30,6 +30,10 @@ The following example is a server/client pair providing an ajax call to add inte
 > testRPCCall :: String -> JExpr -> JExpr -> JExpr
 > (testRPC, testRPCCall) = mkWebRPC "test" $ \x y -> asIO $ return (x + (y::Int))
 
+This code uses a simple request/response type based on strings to be as agnostic as possible about choice of web service stack. It can be used as is, or used as a model for code which targets a particular web stack (Happstack, Snap, FastCGI, etc.).
+
+The jQuery Javascript library is used to handle ajax requests, and hence pages which embed RPC calls must have the jQuery javascript library loaded.
+
 -}
 
 module Language.Javascript.JMacro.Rpc (
