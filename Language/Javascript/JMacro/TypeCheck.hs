@@ -82,10 +82,6 @@ instance Applicative TMonad where
     pure = return
     (<*>) = ap
 
-instance Applicative (StateT a TMonad) where
-    pure = return
-    (<*>) = ap
-
 class JTypeCheck a where
     typecheck :: a -> TMonad JType
 
@@ -101,6 +97,9 @@ withContext act cxt = do
   modify (\s -> s {tc_context = cs})
   return res
 
+traversem_ :: (F.Foldable t, Monad f) => (a -> f b) -> t a -> f ()
+traversem_ f = F.foldr ((>>) . f) (return ())
+
 --assums x is resolved
 freeVarsWithNames :: JType -> TMonad (Map Int String)
 freeVarsWithNames x =
@@ -109,7 +108,7 @@ freeVarsWithNames x =
     where
       go :: JType -> StateT (Map Int (Either String Int), Set String, Int) TMonad ()
       go (JTFree vr) = handleVR vr
-      go (JTRigid vr cs) = handleVR vr >> F.traverse_ (go . fromC) cs
+      go (JTRigid vr cs) = handleVR vr >> traversem_ (go . fromC) cs
       go v = composOpM_ go v
 
       handleVR (mbName, ref) = do
@@ -410,7 +409,7 @@ addConstraint vr@(_,ref) c = case c of
 
 
 cannonicalizeConstraints constraintList = do
-        trace (show constraintList) $ return ()
+        -- trace ("ccl: " ++ show constraintList) $ return ()
         let (subs,restCs)  = findForallSubs constraintList
             (sups,restCs') = findForallSups restCs
         mbSub <- mergeSubs subs
@@ -505,7 +504,6 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
       go :: Int -> ReaderT [Either Int Int] TMonad ()
       go i = do
         s <- ask
-        trace ("st: " ++ show s) $ return ()
         case findLoop i s of
           -- if no set is returned, then that means we just return (i.e. the constraint is dull)
           Just Nothing  -> return ()
@@ -519,21 +517,19 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
                      case l of
                        [] -> return ()
                        cl -> do
-                         --somewhere around here we need to recannonicalize...
-                         trace ("cl: " ++ show cl) $ return () -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
                          mapM_ (go' vr) cl
-                         cl' <- lift (mapM (mapConstraint resolveType) cl)
-                         trace ("cl': " ++ show cl') $ return () -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
-                         --if cl remains free, recannonicalize it
+                         lift (mapM_ (mapConstraint resolveType) cl)
+                          -- not clear if we need to call again. if we resolve any constraints, they should point us back upwards...
+                         --if cl remains free, recannonicalize it?
                 _ -> return ()
       -- Left is super, right is sub
       go' (_,ref) (Sub (JTFree (_,i)))
           | i == ref = return ()
-          | otherwise = trace (show ("super: " ++ show (ref,i))) $
+          | otherwise = -- trace (show ("super: " ++ show (ref,i))) $
                         local (\s -> Left ref : s) $ go i
       go' (_,ref) (Super (JTFree (_,i)))
           | i == ref = return ()
-          | otherwise = trace (show ("sub: " ++ show (ref,i))) $
+          | otherwise = -- trace (show ("sub: " ++ show (ref,i))) $
                         local (\s -> Right ref : s) $ go i
       go' _ _ = return ()
 
@@ -554,11 +550,12 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
 
       findLoop i [] = Nothing
 
-      tryClose vr = lift $ do
-        cl <- cannonicalizeConstraints =<< lookupConstraintsList vr
+      tryClose vr@(_,i) = do
+        cl <- lift$ cannonicalizeConstraints =<< lookupConstraintsList vr
+        -- trace ("tryclose: " ++ show vr) $ trace (show cl) $ return ()
         case partitionCs cl of
-          (_,[s]) -> instantiateVarRef vr s >> return [] -- prefer lower bound (supertype constraint)
-          ([s],_) -> instantiateVarRef vr s >> return []
+          (_,[s]) -> lift (instantiateVarRef vr s) >> go i >> return [] -- prefer lower bound (supertype constraint)
+          ([s],_) -> lift (instantiateVarRef vr s) >> go i >> return []
           _ -> return cl
 
 -- Manipulating the environment
@@ -711,7 +708,7 @@ checkEscapedVars vrs t = go t
 x <: y = do
      xt <- resolveTypeShallow x --shallow because subtyping can close
      yt <- resolveTypeShallow y
-     trace ("sub : " ++ show xt ++ ", " ++ show yt) $ return ()
+     -- trace ("sub : " ++ show xt ++ ", " ++ show yt) $ return ()
      if xt == yt
         then return ()
         else go xt yt `withContext` (do

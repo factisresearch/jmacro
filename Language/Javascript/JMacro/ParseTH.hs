@@ -1,19 +1,21 @@
-module Language.Javascript.JMacro.ParseTH where
+module Language.Javascript.JMacro.ParseTH (parseHSExp) where
 
---import Language.Haskell.Meta.Parse
+import Language.Haskell.Meta.Parse
 import qualified Language.Haskell.TH as TH
-import Language.Haskell.Exts.Translate
-import Language.Haskell.Exts.Parser
-import Language.Haskell.Exts.Extension
-import Language.Haskell.Exts.Annotated.Fixity
-import qualified Language.Haskell.Exts.Syntax as Hs
+-- import Language.Haskell.Exts.Translate
+-- import Language.Haskell.Exts.Parser
+-- import Language.Haskell.Exts.Extension
+-- import Language.Haskell.Exts.Annotated.Fixity
+-- import qualified Language.Haskell.Exts.Syntax as Hs
 
 parseHSExp :: String -> Either String TH.Exp
-parseHSExp = fmap toExp . parseResultToEither . parseExpWithMode myDefaultParseMode
+--for haskell-src-exts-qq
+--parseHSExp = fmap toExp . parseResultToEither . parseExpWithMode myDefaultParseMode
 
 --for Language.Haskell.Meta
---parseHSExp = parseExp
+parseHSExp = parseExp
 
+{-
 parseResultToEither :: ParseResult a -> Either String a
 parseResultToEither (ParseOk a) = Right a
 parseResultToEither (ParseFailed loc e)
@@ -39,3 +41,4 @@ myDefaultExtensions = [PostfixOperators
                       ,RankNTypes
                       ,MultiParamTypeClasses
                       ,RecursiveDo]
+-}
