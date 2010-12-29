@@ -14,7 +14,7 @@ Simple DSL for lightweight (untyped) programmatic generation of Javascript.
 
 module Language.Javascript.JMacro.Base (
   -- * ADT
-  JStat(..), JExpr(..), JVal(..), Ident(..),
+  JStat(..), JExpr(..), JVal(..), Ident(..), IdentSupply(..),
   -- * Generic traversal (via compos)
   JMacro(..), MultiComp(..), Compos(..),
   composOp, composOpM, composOpM_, composOpFold,
@@ -36,16 +36,23 @@ module Language.Javascript.JMacro.Base (
   ) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding (empty)
+import Control.Arrow (second)
+import Control.Monad.State.Strict
+import Control.Monad.Identity
+
 import Data.Function
+import Data.Char (toLower)
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Text.PrettyPrint.HughesPJ
-import Control.Monad.State.Strict
-import Safe
-import Control.Monad.Identity
 import Data.Generics
 import Data.Monoid
+
+import Safe
+import Text.JSON
+import Text.PrettyPrint.HughesPJ
+
+import Web.Encodings
 
 import Language.Javascript.JMacro.Types
 
@@ -57,7 +64,11 @@ newtype IdentSupply a = IS {runIdentSupply :: State [Ident] a} deriving Typeable
 
 inIdentSupply f x = IS $ f (runIdentSupply x)
 
-instance Data a => Data (IdentSupply a)
+instance Data a => Data (IdentSupply a) where
+    gunfold _ _ _ = error "gunfold IdentSupply"
+    toConstr _ = error "toConstr IdentSupply"
+    dataTypeOf _ = mkNoRepType "IdentSupply"
+
 instance Functor IdentSupply where
     fmap f x = inIdentSupply (fmap f) x
 
@@ -479,7 +490,7 @@ instance JsToDoc JVal where
     jsToDoc (JList xs) = brackets . fsep . punctuate comma $ map jsToDoc xs
     jsToDoc (JDouble d) = double d
     jsToDoc (JInt i) = integer i
-    jsToDoc (JStr s) = text ("\""++s++"\"")
+    jsToDoc (JStr s) = text ("\""++encodeJson s++"\"")
     jsToDoc (JRegEx s) = text ("/"++s++"/")
     jsToDoc (JHash m)
             | M.null m = text "{}"
@@ -577,8 +588,8 @@ instance ToJExpr Integer where
 
 instance ToJExpr Char where
     toJExpr = ValExpr . JStr . (:[])
-    toJExprFromList = ValExpr . JStr . escQuotes
-        where escQuotes = tailDef "" . initDef "" . show
+    toJExprFromList = ValExpr . JStr
+--        where escQuotes = tailDef "" . initDef "" . show
 
 instance (ToJExpr a, ToJExpr b) => ToJExpr (a,b) where
     toJExpr (a,b) = ValExpr . JList $ [toJExpr a, toJExpr b]
@@ -703,3 +714,14 @@ jtFromList t y = JTRecord t $ M.fromList y
 
 nullStat :: JStat
 nullStat = BlockStat []
+
+
+-- JSON instance
+instance ToJExpr JSValue where
+    toJExpr JSNull             = ValExpr $ JVar $ StrI "null"
+    toJExpr (JSBool b)         = ValExpr $ JVar $ StrI $ map toLower (show b)
+    toJExpr (JSRational b rat) = ValExpr $ JDouble $ realToFrac rat
+    toJExpr (JSString s)       = ValExpr $ JStr $ fromJSString s
+    toJExpr (JSArray vs)       = ValExpr $ JList $ map toJExpr vs
+    toJExpr (JSObject obj)     = ValExpr $ JHash $ M.fromList $ map (second toJExpr) $ fromJSObject obj
+

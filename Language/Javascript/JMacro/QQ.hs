@@ -40,6 +40,8 @@ import Language.Javascript.JMacro.Base
 import Language.Javascript.JMacro.Types
 import Language.Javascript.JMacro.ParseTH
 
+import Web.Encodings
+
 import Debug.Trace
 
 {--------------------------------------------------------------------
@@ -675,14 +677,13 @@ myStringLiteral t = do
     _ <- char t
     x <- concat <$> many myChar
     _ <- char t
-    return x
+    return $ decodeJson x
  where myChar = do
          c <- noneOf [t]
          case c of
            '\\' -> do
                   c2 <- anyChar
                   return [c,c2]
-           '\n' -> return "\\n"
            _ -> return [c]
 
 myStringLiteralNoBr :: Char -> JMParser String
