@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -50,7 +50,7 @@ import Data.Monoid
 
 import Safe
 import Text.JSON
-import Text.PrettyPrint.HughesPJ
+import Text.PrettyPrint.HughesPJ as PP
 
 import Web.Encodings
 
@@ -228,8 +228,12 @@ instance JMacro [JStat] where
     fromMC (MStat (BlockStat x)) = x
     fromMC _ = error "fromMC"
 
+
 instance Compos MultiComp where
-    compos ret app f' v = case v of
+  compos = mcCompos
+    where
+     mcCompos :: forall m. (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b) -> (MultiComp -> m MultiComp) -> MultiComp -> m MultiComp
+     mcCompos ret app f' v = case v of
         MIdent _ -> ret v
         MStat v' -> ret MStat `app` case v' of
            DeclStat i t -> ret DeclStat `app` f i `app` ret t
@@ -273,7 +277,9 @@ instance Compos MultiComp where
            JFunc xs s -> ret JFunc `app` mapM' f xs `app` f s
            UnsatVal _ -> ret v'
       where
+        mapM' :: (a -> m a) -> [a] -> m [a]
         mapM' g = foldr (app . app (ret (:)) . g) (ret [])
+        f :: JMacro a => a -> m a
         f x = ret fromMC `app` f' (toMC x)
 
 instance Compos JType where
@@ -289,7 +295,6 @@ instance Compos JType where
           x -> ret x
       where
         mapM' g = foldr (app . app (ret (:)) . g) (ret [])
-
 
 {--------------------------------------------------------------------
   New Identifiers
@@ -438,7 +443,7 @@ class JsToDoc a
 
 instance JsToDoc JStat where
     jsToDoc (IfStat cond x y) = text "if" <> parens (jsToDoc cond) $$ braceNest' (jsToDoc x) $$ mbElse
-        where mbElse | y == BlockStat []  = empty
+        where mbElse | y == BlockStat []  = PP.empty
                      | otherwise = text "else" $$ braceNest' (jsToDoc y)
     jsToDoc (DeclStat x t) = text "var" <+> jsToDoc x <> rest
         where rest = case t of
@@ -456,9 +461,9 @@ instance JsToDoc JStat where
     jsToDoc (ReturnStat e) = text "return" <+> jsToDoc e
     jsToDoc (ApplStat e es) = jsToDoc e <> (parens . fsep . punctuate comma $ map jsToDoc es)
     jsToDoc (TryStat s i s1 s2) = text "try" $$ braceNest' (jsToDoc s) $$ mbCatch $$ mbFinally
-        where mbCatch | s1 == BlockStat [] = empty
+        where mbCatch | s1 == BlockStat [] = PP.empty
                       | otherwise = text "catch" <> parens (jsToDoc i) $$ braceNest' (jsToDoc s1)
-              mbFinally | s2 == BlockStat [] = empty
+              mbFinally | s2 == BlockStat [] = PP.empty
                         | otherwise = text "finally" $$ braceNest' (jsToDoc s2)
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
     jsToDoc (PostStat op x) = jsToDoc x <> text op

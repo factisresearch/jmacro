@@ -26,12 +26,9 @@ import Data.Monoid
 import Data.Time
 import qualified Data.IntMap as IM
 
-
 import Text.Html
 import Text.JSON
 import Text.JSON.String
-
-
 
 import Language.Javascript.JMacro.Base
 import Language.Javascript.JMacro.QQ

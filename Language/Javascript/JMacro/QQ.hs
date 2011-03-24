@@ -462,6 +462,7 @@ statement = declStat
           case e1 of
             ValExpr (JVar (StrI "this")) -> gofail
             ValExpr (JVar _) -> return ()
+            ApplExpr _ _ -> gofail
             ValExpr _ -> gofail
             _ -> return ()
           e2 <- expr
