@@ -38,11 +38,12 @@ data JType = JTNum
 
 data Constraint = Sub JType
                 | Super JType
-                -- | Choice Constraint Constraint
-                -- | GLB (Set JType)
-                -- | LUB (Set JType)
                   deriving (Eq, Ord, Read, Show, Typeable, Data)
-
+{-
+                 | Choice Constraint Constraint
+                 | GLB (Set JType)
+                 | LUB (Set JType)
+-}
 type JLocalType = ([(VarRef,Constraint)], JType)
 
 type TypeParserState = (Int, Map String Int)

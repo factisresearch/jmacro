@@ -56,8 +56,8 @@ intersectionWithM f m1 m2 = T.sequence $ M.intersectionWith f m1 m2
 -- Basic Types and TMonad
 data StoreVal = SVType JType
               | SVConstrained (Set Constraint)
-              -- | SVFreshType Int
                 deriving Show
+              {- -- | SVFreshType Int -}
 
 data TCState = TCS {tc_env :: [Map Ident JType],
                     tc_vars :: Map Int StoreVal,
