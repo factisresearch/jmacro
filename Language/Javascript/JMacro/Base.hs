@@ -21,7 +21,7 @@ module Language.Javascript.JMacro.Base (
   -- * Hygienic transformation
   withHygiene, scopify,
   -- * Display/Output
-  renderJs, JsToDoc(..),
+  renderJs, renderPrefixJs, JsToDoc(..),
   -- * Ad-hoc data marshalling
   ToJExpr(..),
   -- * Literals
@@ -41,18 +41,17 @@ import Control.Monad.State.Strict
 import Control.Monad.Identity
 
 import Data.Function
-import Data.Char (toLower)
+import Data.Char (toLower,isControl)
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Generics
 import Data.Monoid
 
+import Numeric(showHex)
 import Safe
 import Text.JSON
 import Text.PrettyPrint.HughesPJ as PP
-
-import Web.Encodings
 
 import Language.Javascript.JMacro.Types
 
@@ -432,6 +431,10 @@ scopify x = evalState (fromMC <$> go (toMC x)) (newIdentSupply Nothing)
 renderJs :: (JsToDoc a, JMacro a) => a -> Doc
 renderJs = jsToDoc . jsSaturate Nothing
 
+-- | Render a syntax tree as a pretty-printable document, using a given prefix to all generated names. Use this with distinct prefixes to ensure distinct generated names between independent calls to render(Prefix)Js.
+renderPrefixJs :: (JsToDoc a, JMacro a) => String -> a -> Doc
+renderPrefixJs pfx = jsToDoc . jsSaturate (Just $ "jmId_"++pfx)
+
 braceNest :: Doc -> Doc
 braceNest x = char '{' $$ nest 2 x $$ char '}'
 
@@ -729,4 +732,26 @@ instance ToJExpr JSValue where
     toJExpr (JSString s)       = ValExpr $ JStr $ fromJSString s
     toJExpr (JSArray vs)       = ValExpr $ JList $ map toJExpr vs
     toJExpr (JSObject obj)     = ValExpr $ JHash $ M.fromList $ map (second toJExpr) $ fromJSObject obj
+
+-------------------------
+
+-- Taken from json package by Sigbjorn Finne.
+encodeJson = concatMap encodeJsonChar
+
+encodeJsonChar :: Char -> String
+encodeJsonChar '/'  = "\\/"
+encodeJsonChar '\b' = "\\b"
+encodeJsonChar '\f' = "\\f"
+encodeJsonChar '\n' = "\\n"
+encodeJsonChar '\r' = "\\r"
+encodeJsonChar '\t' = "\\t"
+encodeJsonChar '"' = "\\\""
+encodeJsonChar '\\' = "\\\\"
+encodeJsonChar c
+    | not $ isControl c = [c]
+    | c < '\x10'   = '\\' : 'u' : '0' : '0' : '0' : hexxs
+    | c < '\x100'  = '\\' : 'u' : '0' : '0' : hexxs
+    | c < '\x1000' = '\\' : 'u' : '0' : hexxs
+    where hexxs = showHex (fromEnum c) "" -- FIXME
+encodeJsonChar c = [c]
 

@@ -46,15 +46,15 @@ The above is an expression representing the application of foo to x and y.
 
 As is the above.
 
-> renderJs [$jmacroE|foo (x,y)|]]
+> renderJs [$jmacroE|foo (x,y)|]
 
 While the above is an error. (i.e. standard javascript function application cannot seperate the leading parenthesis of the argument from the function being applied)
 
-> \x -> [$jmacroE|foo `(x)`|]]
+> \x -> [$jmacroE|foo `(x)`|]
 
 The above is a haskell expression that provides a function that takes an x, and yields an expression representing the application of foo to the value of x as transformed to a Javascript expression.
 
-> [$jmacroE|\x ->`(foo x)`|]]
+> [$jmacroE|\x ->`(foo x)`|]
 
 Meanwhile, the above lambda is in Javascript, and brings the variable into scope both in javascript and in the enclosed antiquotes. The expression is a Javascript function that takes an x, and yields an expression produced by the application of the Haskell function foo as applied to the identifier x (which is of type JExpr -- i.e. a Javascript expression).
 

@@ -323,9 +323,15 @@ identAssignDecl = do
 statblock :: JMParser [JStat]
 statblock = concat <$> (sepEndBy1 (whiteSpace >> statement) (semi <|> return ""))
 
+statblock0 :: JMParser [JStat]
+statblock0 = try statblock <|> (whiteSpace >> return [])
+
 l2s :: [JStat] -> JStat
 l2s xs = BlockStat xs
 
+statementOrEmpty :: JMParser [JStat]
+statementOrEmpty = try emptyStat <|> statement
+    where emptyStat = braces (whiteSpace >> return [])
 
 -- return either an expression or a statement
 statement :: JMParser [JStat]
@@ -386,18 +392,18 @@ statement = declStat
       ifStat = do
         reserved "if"
         p <- parens expr
-        b <- l2s <$> statement
+        b <- l2s <$> statementOrEmpty
         isElse <- (lookAhead (reserved "else") >> return True)
                   <|> return False
         if isElse
           then do
             reserved "else"
-            return . IfStat p b . l2s <$> statement
+            return . IfStat p b . l2s <$> statementOrEmpty
           else return $ [IfStat p b nullStat]
 
       whileStat =
           reserved "while" >> liftM2 (\e b -> [WhileStat e (l2s b)])
-                              (parens expr) statement
+                              (parens expr) statementOrEmpty
 
       switchStat = do
         reserved "switch"
@@ -406,7 +412,7 @@ statement = declStat
         return $ [SwitchStat e l (l2s d)]
 
       caseStat =
-        reserved "case" >> liftM2 (,) expr (char ':' >> l2s <$> statblock)
+        reserved "case" >> liftM2 (,) expr (char ':' >> l2s <$> statblock0)
 
       tryStat = do
         reserved "try"
