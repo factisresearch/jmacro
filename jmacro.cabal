@@ -1,5 +1,5 @@
 name:                jmacro
-version:             0.5
+version:             0.5.1
 synopsis:            QuasiQuotation library for programmatic generation of Javascript code.
 description:         Javascript syntax, functional syntax, hygienic names, compile-time guarantees of syntactic correctness, limited typechecking.
 category:            Language

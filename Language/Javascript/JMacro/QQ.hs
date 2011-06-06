@@ -228,7 +228,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
-           P.reservedOpNames = ["--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
+           P.reservedOpNames = ["+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -345,7 +345,7 @@ statement = declStat
             <|> switchStat
             <|> forStat
             <|> braces statblock
-            <|> assignStat
+            <|> assignOpStat
             <|> tryStat
             <|> applStat
             <|> breakStat
@@ -387,7 +387,7 @@ statement = declStat
           return [ForeignStat i t]
 
       returnStat =
-        reserved "return" >> (:[]) . ReturnStat <$> expr
+        reserved "return" >> (:[]) . ReturnStat <$> option (ValExpr $ JVar $ StrI "null") expr
 
       ifStat = do
         reserved "if"
@@ -461,9 +461,15 @@ statement = declStat
                 jFor' before p after bs = before ++ [WhileStat (toJExpr p) b']
                     where b' = BlockStat $ bs ++ after
 
-
-      assignStat = do
-          e1 <- try $ dotExpr <* reservedOp "="
+      assignOpStat = do
+          let rop x = reservedOp x >> return x
+          (e1,op) <- try $ liftM2 (,) dotExpr (fmap (take 1) $
+                                                   rop "="
+                                               <|> rop "+="
+                                               <|> rop "*="
+                                               <|> rop "/="
+                                               <|> rop "%="
+                                              )
           let gofail = fail ("Invalid assignment.")
           case e1 of
             ValExpr (JVar (StrI "this")) -> gofail
@@ -472,7 +478,7 @@ statement = declStat
             ValExpr _ -> gofail
             _ -> return ()
           e2 <- expr
-          return [AssignStat e1 e2]
+          return [AssignStat e1 (if op == "=" then e2 else InfixExpr op e1 e2)]
 
 
       applStat = expr2stat' =<< expr
@@ -523,7 +529,7 @@ expr = do
           addIf ans <|> return ans
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
     table = [[iop "*", iop "/", iop "%"],
-             [iop "++", iop "+", iop "-"],
+             [iop "++", iop "+", iop "-", iop "--"],
              [iope "==", iope "!=", iope "<", iope ">",
               iope ">=", iope "<=", iope "==="],
              [iop "&&", iop "||"]
@@ -570,7 +576,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               negnum = either (JInt . negate) (JDouble . negate) <$> try (char '-' >> natFloat)
               str   = JStr   <$> (myStringLiteral '"' <|> myStringLiteral '\'')
               regex = do
-                s <- myStringLiteralNoBr '/'
+                s <- regexLiteral --myStringLiteralNoBr '/'
                 case compileM (BS.pack s) [] of
                   Right _ -> return (JRegEx s)
                   Left err -> fail ("Parse error in regexp: " ++ err)
@@ -693,14 +699,18 @@ myStringLiteral t = do
                   return [c,c2]
            _ -> return [c]
 
-myStringLiteralNoBr :: Char -> JMParser String
-myStringLiteralNoBr t = do
-    _ <- char t
+--tricky bit to deal with regex literals and comments / / -- if we hit // inside, then we fail, since that isn't ending the regex but introducing a comment, and thus the initial / could not have introduced a regex.
+regexLiteral :: JMParser String
+regexLiteral = do
+    _ <- char '/'
     x <- concat <$> many myChar
-    _ <- char t
-    return x
+    _ <- char '/'
+    b <- option False (char '/' >> return True)
+    if b
+       then mzero
+       else return x
  where myChar = do
-         c <- noneOf [t,'\n']
+         c <- noneOf ['/','\n']
          case c of
            '\\' -> do
                   c2 <- anyChar
