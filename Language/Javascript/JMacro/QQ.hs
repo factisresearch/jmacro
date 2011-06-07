@@ -228,7 +228,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
-           P.reservedOpNames = ["+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
+           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -532,10 +532,13 @@ expr = do
              [iop "++", iop "+", iop "-", iop "--"],
              [iope "==", iope "!=", iope "<", iope ">",
               iope ">=", iope "<=", iope "==="],
-             [iop "&&", iop "||"]
+             [iop "&&", iop "||"],
+             [applOp, applOpRev]
             ]
     iop  s  = Infix (reservedOp s >> return (InfixExpr s)) AssocLeft
     iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
+    applOp  = Infix (reservedOp "<|" >> return (\x y -> ApplExpr x [y])) AssocRight
+    applOpRev  = Infix (reservedOp "|>" >> return (\x y -> ApplExpr y [x])) AssocLeft
 
 dotExpr :: JMParser JExpr
 dotExpr = do
