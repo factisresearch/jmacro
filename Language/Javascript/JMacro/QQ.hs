@@ -228,7 +228,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
-           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!"],
+           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!",":"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -530,6 +530,7 @@ expr = do
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
     table = [[iop "*", iop "/", iop "%"],
              [iop "++", iop "+", iop "-", iop "--"],
+             [consOp],
              [iope "==", iope "!=", iope "<", iope ">",
               iope ">=", iope "<=", iope "==="],
              [iop "&&", iop "||"],
@@ -539,6 +540,10 @@ expr = do
     iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
     applOp  = Infix (reservedOp "<|" >> return (\x y -> ApplExpr x [y])) AssocRight
     applOpRev  = Infix (reservedOp "|>" >> return (\x y -> ApplExpr y [x])) AssocLeft
+    consOp  = Infix (reservedOp ":" >> return consAct) AssocRight
+    consAct x y = ApplExpr (ValExpr (JFunc [StrI "x",StrI "y"] (BlockStat [BlockStat [DeclStat (StrI "tmp") Nothing,AssignStat (ValExpr (JVar (StrI "tmp"))) (ApplExpr (SelExpr (ValExpr (JVar (StrI "x"))) (StrI "slice")) [ValExpr (JInt 0)]),ApplStat (SelExpr (ValExpr (JVar (StrI "tmp"))) (StrI "unshift")) [ValExpr (JVar (StrI "y"))],ReturnStat (ValExpr (JVar (StrI "tmp")))]]))) [x,y]
+
+
 
 dotExpr :: JMParser JExpr
 dotExpr = do
