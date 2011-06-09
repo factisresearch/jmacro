@@ -15,17 +15,19 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding ((<|>),many,optional,(<*))
+import Control.Arrow(first)
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower, isUpper)
 import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
+import Data.Monoid
 import qualified Data.Map as M
 
 --import Language.Haskell.Meta.Parse
 import qualified Language.Haskell.TH as TH
 import Language.Haskell.TH(mkName)
-import qualified Language.Haskell.TH.Lib as TH
+--import qualified Language.Haskell.TH.Lib as TH
 import Language.Haskell.TH.Quote
 
 import Text.ParserCombinators.Parsec
@@ -42,7 +44,7 @@ import Language.Javascript.JMacro.ParseTH
 
 import Web.Encodings
 
-import Debug.Trace
+--import Debug.Trace
 
 {--------------------------------------------------------------------
   QuasiQuotation
@@ -100,7 +102,7 @@ antiIdent s e = fromMC $ go (toMC e)
 antiIdents :: JMacro a => [String] -> a -> a
 antiIdents ss x = foldr antiIdent x ss
 
-
+fixIdent :: String -> String
 fixIdent css@(c:_)
     | isUpper c = '_' : escapeDollar css
     | otherwise = escapeDollar css
@@ -228,7 +230,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
-           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!",":"],
+           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!",":|","@"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -257,7 +259,7 @@ lexeme    = P.lexeme lexer
 (<*) :: Monad m => m b -> m a -> m b
 x <* y = do
   xr <- x
-  y
+  _ <- y
   return xr
 
 parseJM :: String -> Either ParseError JStat
@@ -274,20 +276,13 @@ parseJME s = runParser jmacroParserE () "" s
             eof
             return ans
 
-{-
-ident :: JMParser Ident
-ident = do
-  i <- identifier
-  when ("jmId_" `isPrefixOf` i) $ fail "Illegal use of reserved jmId_ prefix in variable name."
-  return (StrI i)
--}
-
-
+getType :: JMParser (Bool, JLocalType)
 getType = do
   isForce <- (reservedOp "::!" >> return True) <|> (reservedOp "::" >> return False)
   t <- runTypeParser
   return (isForce, t)
 
+addForcedType :: Maybe (Bool, JLocalType) -> JExpr -> JExpr
 addForcedType (Just (True,t)) e = TypeExpr True e t
 addForcedType _ e = e
 
@@ -308,6 +303,55 @@ identdecl = do
   when (i=="this") $ fail "Illegal attempt to name variable 'this'."
   return (StrI i)
 
+cleanIdent :: Ident -> Ident
+cleanIdent (StrI ('!':x)) = StrI x
+cleanIdent x = x
+
+-- Patterns
+data PatternTree = PTAs Ident PatternTree
+                 | PTCons PatternTree PatternTree
+                 | PTList [PatternTree]
+                 | PTObj [(String,PatternTree)]
+                 | PTVar Ident
+                   deriving Show
+patternTree :: JMParser PatternTree
+patternTree = toCons <$> (parens patternTree <|> ptList <|> ptObj <|> varOrAs) `sepBy1` reservedOp ":|"
+    where
+      toCons [] = PTVar (StrI "_")
+      toCons [x] = x
+      toCons (x:xs) = PTCons x (toCons xs)
+      ptList  = lexeme $ PTList <$> brackets' (commaSep patternTree)
+      ptObj   = lexeme $ PTObj  <$> oxfordBraces (commaSep $ liftM2 (,) myIdent (colon >> patternTree))
+      varOrAs = do
+        i <- identdecl
+        isAs <- option False (reservedOp "@" >> return True)
+        if isAs
+          then PTAs i <$> patternTree
+          else return $ PTVar i
+
+--either we have a function from any ident to the constituent parts
+--OR the top level is named, and hence we have the top ident, plus decls for the constituent parts
+patternBinding :: JMParser (Either (Ident -> [JStat]) (Ident,[JStat]))
+patternBinding = do
+  ptree <- patternTree
+  let go path (PTAs asIdent pt) = [DeclStat asIdent Nothing, AssignStat (ValExpr (JVar (cleanIdent asIdent))) path] ++ go path pt
+      go path (PTVar i)
+          | i == (StrI "_") = []
+          | otherwise = [DeclStat i Nothing, AssignStat (ValExpr (JVar (cleanIdent i))) (path)]
+      go path (PTList pts) = concatMap (uncurry go) $ zip (map addIntToPath [0..]) pts
+           where addIntToPath i = IdxExpr path (ValExpr $ JInt i)
+      go path (PTObj xs)   = concatMap (uncurry go) $ map (first fixPath) xs
+           where fixPath lbl = IdxExpr path (ValExpr $ JStr lbl)
+      go path (PTCons x xs) = concat [go (IdxExpr path (ValExpr $ JInt 0)) x,
+                                      go (ApplExpr (SelExpr path (StrI "slice")) [ValExpr $ JInt 1]) xs]
+  case ptree of
+    PTVar i -> return $ Right (i,[])
+    PTAs  i pt -> return $ Right (i, go (ValExpr $ JVar i) pt)
+    _ -> return $ Left $ \i -> go (ValExpr $ JVar i) ptree
+
+patternBlocks :: JMParser ([Ident],[JStat])
+patternBlocks = fmap concat . unzip . zipWith (\i efr -> either (\f -> (i, f i)) id efr) (map (StrI . ("jmId_match_" ++) . show) [(1::Int)..]) <$> many patternBinding
+
 --varidentdecls can take types!
 identAssignDecl :: JMParser [JStat]
 identAssignDecl = do
@@ -315,10 +359,8 @@ identAssignDecl = do
   optAssignStat <- optionMaybe $ do
                     reservedOp "="
                     e <- expr
-                    return $ AssignStat (ValExpr (JVar (clean i))) (addForcedType mbTyp e)
+                    return $ AssignStat (ValExpr (JVar (cleanIdent i))) (addForcedType mbTyp e)
   return $ DeclStat i (fmap snd mbTyp) : maybe [] (:[]) optAssignStat
-    where clean (StrI ('!':x)) = StrI x
-          clean x = x
 
 statblock :: JMParser [JStat]
 statblock = concat <$> (sepEndBy1 (whiteSpace >> statement) (semi <|> return ""))
@@ -362,22 +404,21 @@ statement = declStat
         reserved "function"
 
         (i,mbTyp) <- varidentdecl
-        as <- parens (commaSep identdecl) <|> many1 identdecl
-        b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement)
+        (as,patDecls) <- fmap (\x -> (x,[])) (try $ parens (commaSep identdecl)) <|> patternBlocks
+        b' <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement)
+        let b = BlockStat patDecls `mappend` b'
         return $ [DeclStat i (fmap snd mbTyp),
-                  AssignStat (ValExpr $ JVar (clean i)) (addForcedType mbTyp $ ValExpr $ JFunc as b)]
-            where clean (StrI ('!':x)) = StrI x
-                  clean x = x
+                  AssignStat (ValExpr $ JVar (cleanIdent i)) (addForcedType mbTyp $ ValExpr $ JFunc as b)]
 
       funDecl = do
         reserved "fun"
         n <- identdecl
         mbTyp <- optionMaybe getType
-        as <- many identdecl
-        b <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
+        (as, patDecls) <- patternBlocks
+        b' <- try (ReturnStat <$> braces expr) <|> (l2s <$> statement) <|> (symbol "->" >> ReturnStat <$> expr)
+        let b = BlockStat patDecls `mappend` b'
         return $ [DeclStat (addBang n) (fmap snd mbTyp),
                   AssignStat (ValExpr $ JVar n) (addForcedType mbTyp $ ValExpr $ JFunc as b)]
-
             where addBang (StrI x) = StrI ('!':'!':x)
 
       foreignStat = do
@@ -540,10 +581,9 @@ expr = do
     iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
     applOp  = Infix (reservedOp "<|" >> return (\x y -> ApplExpr x [y])) AssocRight
     applOpRev  = Infix (reservedOp "|>" >> return (\x y -> ApplExpr y [x])) AssocLeft
-    consOp  = Infix (reservedOp ":" >> return consAct) AssocRight
-    consAct x y = ApplExpr (ValExpr (JFunc [StrI "x",StrI "y"] (BlockStat [BlockStat [DeclStat (StrI "tmp") Nothing,AssignStat (ValExpr (JVar (StrI "tmp"))) (ApplExpr (SelExpr (ValExpr (JVar (StrI "x"))) (StrI "slice")) [ValExpr (JInt 0)]),ApplStat (SelExpr (ValExpr (JVar (StrI "tmp"))) (StrI "unshift")) [ValExpr (JVar (StrI "y"))],ReturnStat (ValExpr (JVar (StrI "tmp")))]]))) [x,y]
-
-
+    consOp  = Infix (reservedOp ":|" >> return consAct) AssocRight
+    consAct x y = ApplExpr (ValExpr (JFunc [StrI "x",StrI "y"] (BlockStat [BlockStat [DeclStat (StrI "tmp") Nothing, AssignStat tmpVar (ApplExpr (SelExpr (ValExpr (JVar (StrI "x"))) (StrI "slice")) [ValExpr (JInt 0)]),ApplStat (SelExpr tmpVar (StrI "unshift")) [ValExpr (JVar (StrI "y"))],ReturnStat tmpVar]]))) [x,y]
+        where tmpVar = ValExpr (JVar (StrI "tmp"))
 
 dotExpr :: JMParser JExpr
 dotExpr = do
@@ -561,7 +601,7 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
             case nxt of
               Just '.' -> addNxt =<< (dot >> (SelExpr e <$> (ident' <|> numIdent)))
               Just '[' -> addNxt =<< (IdxExpr e <$> brackets' expr)
-              Just '(' -> addNxt =<< (ApplExpr e <$> args')
+              Just '(' -> addNxt =<< (ApplExpr e <$> parens' (commaSep expr))
               Just '-' -> try (reservedOp "--" >> return (PostExpr "--" e)) <|> return e
               Just '+' -> try (reservedOp "++" >> return (PostExpr "++" e)) <|> return e
               _   -> return e
@@ -593,23 +633,22 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               var = JVar <$> ident'
               func = do
                 (symbol "\\" >> return ()) <|> reserved "function"
-                liftM2 JFunc (parens (commaSep identdecl) <|> many identdecl)
-                             (braces' statOrEblock <|>
-                               (symbol "->" >> (ReturnStat <$> expr)))
+                (as,patDecls) <- fmap (\x -> (x,[])) (try $ parens (commaSep identdecl)) <|> patternBlocks
+                b' <- (braces' statOrEblock <|> (symbol "->" >> (ReturnStat <$> expr)))
+                return $ JFunc as (BlockStat patDecls `mappend` b')
               statOrEblock  = try (ReturnStat <$> expr `folBy` '}') <|> (l2s <$> statblock)
               propPair = liftM2 (,) myIdent (colon >> expr)
 
 --notFolBy a b = a <* notFollowedBy (char b)
+folBy :: JMParser a -> Char -> JMParser a
 folBy a b = a <* (lookAhead (char b) >>= const (return ()))
-args' :: JMParser [JExpr]
-args' = parens' $ commaSep expr
 
 --Parsers without Lexeme
-
-braces', brackets', parens' :: JMParser a -> JMParser a
+braces', brackets', parens', oxfordBraces :: JMParser a -> JMParser a
 brackets' = around' '[' ']'
 braces' = around' '{' '}'
 parens' = around' '(' ')'
+oxfordBraces x = lexeme (reservedOp "{|") >> (lexeme x <* reservedOp "|}")
 
 around' :: Char -> Char -> JMParser a -> JMParser a
 around' a b x = lexeme (char a) >> (lexeme x <* char b)

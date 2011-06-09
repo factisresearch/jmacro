@@ -73,7 +73,9 @@ module Language.Javascript.JMacro (
   module Language.Javascript.JMacro.Types
  ) where
 
+{-
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
+-}
 
 import Language.Javascript.JMacro.Base hiding (expr2stat)
 import Language.Javascript.JMacro.QQ
