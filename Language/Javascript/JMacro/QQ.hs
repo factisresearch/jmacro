@@ -21,6 +21,7 @@ import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower, isUpper)
 import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
+import Data.Maybe(fromMaybe)
 import Data.Monoid
 import qualified Data.Map as M
 
@@ -307,6 +308,7 @@ cleanIdent :: Ident -> Ident
 cleanIdent (StrI ('!':x)) = StrI x
 cleanIdent x = x
 
+-- Handle varident decls for type annotations?
 -- Patterns
 data PatternTree = PTAs Ident PatternTree
                  | PTCons PatternTree PatternTree
@@ -323,7 +325,7 @@ patternTree = toCons <$> (parens patternTree <|> ptList <|> ptObj <|> varOrAs) `
       ptList  = lexeme $ PTList <$> brackets' (commaSep patternTree)
       ptObj   = lexeme $ PTObj  <$> oxfordBraces (commaSep $ liftM2 (,) myIdent (colon >> patternTree))
       varOrAs = do
-        i <- identdecl
+        i <- fst <$> varidentdecl
         isAs <- option False (reservedOp "@" >> return True)
         if isAs
           then PTAs i <$> patternTree
@@ -352,15 +354,14 @@ patternBinding = do
 patternBlocks :: JMParser ([Ident],[JStat])
 patternBlocks = fmap concat . unzip . zipWith (\i efr -> either (\f -> (i, f i)) id efr) (map (StrI . ("jmId_match_" ++) . show) [(1::Int)..]) <$> many patternBinding
 
---varidentdecls can take types!
-identAssignDecl :: JMParser [JStat]
-identAssignDecl = do
-  (i,mbTyp) <- varidentdecl
-  optAssignStat <- optionMaybe $ do
-                    reservedOp "="
-                    e <- expr
-                    return $ AssignStat (ValExpr (JVar (cleanIdent i))) (addForcedType mbTyp e)
-  return $ DeclStat i (fmap snd mbTyp) : maybe [] (:[]) optAssignStat
+destructuringDecl = do
+    (i,patDecls) <- either (\f -> (matchVar, f matchVar)) id <$> patternBinding
+    optAssignStat <- optionMaybe $ do
+       reservedOp "="
+       e <- expr
+       return $  AssignStat (ValExpr (JVar (cleanIdent i))) e : patDecls
+    return $ DeclStat i Nothing : fromMaybe [] optAssignStat
+  where matchVar = StrI "jmId_match_var"
 
 statblock :: JMParser [JStat]
 statblock = concat <$> (sepEndBy1 (whiteSpace >> statement) (semi <|> return ""))
@@ -396,7 +397,7 @@ statement = declStat
     where
       declStat = do
         reserved "var"
-        res <- concat <$> commaSep1 identAssignDecl
+        res <- concat <$> commaSep1 destructuringDecl
         _ <- semi
         return res
 
