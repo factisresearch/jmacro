@@ -806,7 +806,7 @@ instance JTypeCheck JExpr where
                   typecheck e  <<:> return t
                   typecheck e1 <<:> return t
 
-    typecheck (PostExpr _ e) = case e of
+    typecheck (PPostExpr _ _ e) = case e of
                                  (SelExpr _ _) -> go
                                  (ValExpr (JVar _)) -> go
                                  (IdxExpr _ _) -> go
@@ -903,7 +903,7 @@ instance JTypeCheck JStat where
               stripStat (t:ts) = t : stripStat ts
               stripStat t = t
     typecheck (ApplStat args body) = typecheck (ApplExpr args body) >> return JTStat
-    typecheck (PostStat s e) = typecheck (PostExpr s e) >> return JTStat
+    typecheck (PPostStat b s e) = typecheck (PPostExpr b s e) >> return JTStat
     typecheck (AssignStat e e1) = do
       typecheck e1 <<:> typecheck e
       return JTStat

@@ -571,6 +571,7 @@ expr = do
           addIf ans <|> return ans
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
     table = [[iop "*", iop "/", iop "%"],
+             [pop "++", pop "--"],
              [iop "++", iop "+", iop "-", iop "--"],
              [consOp],
              [iope "==", iope "!=", iope "<", iope ">",
@@ -578,6 +579,7 @@ expr = do
              [iop "&&", iop "||"],
              [applOp, applOpRev]
             ]
+    pop  s  = Prefix (reservedOp s >> return (PPostExpr True s))
     iop  s  = Infix (reservedOp s >> return (InfixExpr s)) AssocLeft
     iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
     applOp  = Infix (reservedOp "<|" >> return (\x y -> ApplExpr x [y])) AssocRight
@@ -603,8 +605,8 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               Just '.' -> addNxt =<< (dot >> (SelExpr e <$> (ident' <|> numIdent)))
               Just '[' -> addNxt =<< (IdxExpr e <$> brackets' expr)
               Just '(' -> addNxt =<< (ApplExpr e <$> parens' (commaSep expr))
-              Just '-' -> try (reservedOp "--" >> return (PostExpr "--" e)) <|> return e
-              Just '+' -> try (reservedOp "++" >> return (PostExpr "++" e)) <|> return e
+              Just '-' -> try (reservedOp "--" >> return (PPostExpr False "--" e)) <|> return e
+              Just '+' -> try (reservedOp "++" >> return (PPostExpr False "++" e)) <|> return e
               _   -> return e
 
     numIdent = StrI <$> many1 digit

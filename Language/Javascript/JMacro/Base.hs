@@ -109,7 +109,7 @@ data JStat = DeclStat   Ident (Maybe JLocalType)
            | TryStat    JStat Ident JStat JStat
            | BlockStat  [JStat]
            | ApplStat   JExpr [JExpr]
-           | PostStat   String JExpr
+           | PPostStat  Bool String JExpr
            | AssignStat JExpr JExpr
            | UnsatBlock (IdentSupply JStat)
            | AntiStat   String
@@ -132,7 +132,7 @@ data JExpr = ValExpr    JVal
            | SelExpr    JExpr Ident
            | IdxExpr    JExpr JExpr
            | InfixExpr  String JExpr JExpr
-           | PostExpr   String JExpr
+           | PPostExpr  Bool String JExpr
            | IfExpr     JExpr JExpr JExpr
            | NewExpr    JExpr
            | ApplExpr   JExpr [JExpr]
@@ -167,7 +167,7 @@ newtype Ident = StrI String deriving (Eq, Ord, Show, Data, Typeable)
 expr2stat :: JExpr -> JStat
 expr2stat (ApplExpr x y) = (ApplStat x y)
 expr2stat (IfExpr x y z) = IfStat x (expr2stat y) (expr2stat z)
-expr2stat (PostExpr s x) = PostStat s x
+expr2stat (PPostExpr b s x) = PPostStat b s x
 expr2stat (AntiExpr x) = AntiStat x
 expr2stat _ = nullStat
 
@@ -245,7 +245,7 @@ instance Compos MultiComp where
            BlockStat xs -> ret BlockStat `app` mapM' f xs
            ApplStat  e xs -> ret ApplStat `app` f e `app` mapM' f xs
            TryStat s i s1 s2 -> ret TryStat `app` f s `app` f i `app` f s1 `app` f s2
-           PostStat o e -> ret (PostStat o) `app` f e
+           PPostStat b o e -> ret (PPostStat b o) `app` f e
            AssignStat e e' -> ret AssignStat `app` f e `app` f e'
            UnsatBlock _ -> ret v'
            AntiStat _ -> ret v'
@@ -256,7 +256,7 @@ instance Compos MultiComp where
            SelExpr e e' -> ret SelExpr `app` f e `app` f e'
            IdxExpr e e' -> ret IdxExpr `app` f e `app` f e'
            InfixExpr o e e' -> ret (InfixExpr o) `app` f e `app` f e'
-           PostExpr o e -> ret (PostExpr o) `app` f e
+           PPostExpr b o e -> ret (PPostExpr b o) `app` f e
            IfExpr e e' e'' -> ret IfExpr `app` f e `app` f e' `app` f e''
            NewExpr e -> ret NewExpr `app` f e
            ApplExpr e xs -> ret ApplExpr `app` f e `app` mapM' f xs
@@ -469,7 +469,9 @@ instance JsToDoc JStat where
               mbFinally | s2 == BlockStat [] = PP.empty
                         | otherwise = text "finally" $$ braceNest' (jsToDoc s2)
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
-    jsToDoc (PostStat op x) = jsToDoc x <> text op
+    jsToDoc (PPostStat isPre op x)
+        | isPre = text op <> jsToDoc x
+        | otherwise = jsToDoc x <> text op
     jsToDoc (AntiStat s) = text $ "`(" ++ s ++ ")`"
     jsToDoc (ForeignStat i t) = text "//foriegn" <+> jsToDoc i <+> text "::" <+> jsToDoc t
     jsToDoc (BlockStat xs) = jsToDoc (flattenBlocks xs)
@@ -486,7 +488,10 @@ instance JsToDoc JExpr where
         where op' | op == "++" = "+"
                   | otherwise = op
 
-    jsToDoc (PostExpr op x) = jsToDoc x <> text op
+    jsToDoc (PPostExpr isPre op x)
+        | isPre = text op <> jsToDoc x
+        | otherwise = jsToDoc x <> text op
+
     jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fsep . punctuate comma $ map jsToDoc xs)
     jsToDoc (NewExpr e) = text "new" <+> jsToDoc e
     jsToDoc (AntiExpr s) = text $ "`(" ++ s ++ ")`"
@@ -680,7 +685,7 @@ jVarTy f t = UnsatBlock . IS $ do
 -- | Create a for in statement.
 -- Usage:
 -- @jForIn {expression} $ \x -> {block involving x}@
-jForIn :: ToSat a => JExpr -> (JExpr -> a) -> JStat
+jForIn :: ToSat a => JExpr -> (JExpr -> a)  -> JStat
 jForIn e f = UnsatBlock . IS $ do
                (block, is) <- runIdentSupply $ toSat_ f []
                return $ ForInStat False (headNote "jForIn" is) e block
