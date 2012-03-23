@@ -46,7 +46,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.Generics
-import Data.Monoid
+import Data.Monoid(Monoid, mappend, mempty)
 
 import Numeric(showHex)
 import Safe

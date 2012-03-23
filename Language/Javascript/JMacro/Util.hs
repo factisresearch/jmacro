@@ -1,6 +1,6 @@
 module Language.Javascript.JMacro.Util where
 
-import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
+import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read, (<), (&&))
 
 import qualified Prelude as P
 import Language.Javascript.JMacro.Base
