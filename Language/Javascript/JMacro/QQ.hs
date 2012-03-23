@@ -37,11 +37,13 @@ import Text.ParserCombinators.Parsec.Error
 import qualified Text.ParserCombinators.Parsec.Token as P
 import Text.ParserCombinators.Parsec.Language(javaStyle)
 
-import Text.Regex.PCRE.Light (compileM)
+import Text.Regex.Posix.String
 
 import Language.Javascript.JMacro.Base
 import Language.Javascript.JMacro.Types
 import Language.Javascript.JMacro.ParseTH
+
+import System.IO.Unsafe
 
 import Web.Encodings
 
@@ -549,6 +551,10 @@ statement = declStat
 --args :: JMParser [JExpr]
 --args = parens $ commaSep expr
 
+compileRegex s = unsafePerformIO $ compile co eo s
+    where co = compExtended
+          eo = execBlank
+
 expr :: JMParser JExpr
 expr = do
   e <- exprWithIf
@@ -628,9 +634,9 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
               str   = JStr   <$> (myStringLiteral '"' <|> myStringLiteral '\'')
               regex = do
                 s <- regexLiteral --myStringLiteralNoBr '/'
-                case compileM (BS.pack s) [] of
+                case compileRegex s of
                   Right _ -> return (JRegEx s)
-                  Left err -> fail ("Parse error in regexp: " ++ err)
+                  Left err -> fail ("Parse error in regexp: " ++ show err)
               list  = JList  <$> brackets' (commaSep expr)
               hash  = JHash  . M.fromList <$> braces' (commaSep propPair)
               var = JVar <$> ident'
