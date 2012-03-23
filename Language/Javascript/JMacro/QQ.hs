@@ -188,7 +188,7 @@ jm2th v = dataToExpQ (const Nothing
                                       Left err -> Just $ fail err
           handleExpr (ValExpr (JFunc is' s)) = Just $
               TH.appE (TH.varE $ mkName "jLam")
-                      (TH.lamE (map (TH.varP . mkName) is)
+                      (TH.lamE (map (TH.varP . mkName . fixIdent) is)
                                (jm2th $ antiIdents is s))
             where is = map (\(StrI i) -> i) is'
 
