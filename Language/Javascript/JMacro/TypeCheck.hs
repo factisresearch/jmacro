@@ -20,10 +20,11 @@ import Data.List(intercalate, nub, transpose)
 import qualified Data.Traversable as T
 import qualified Data.Foldable as F
 import qualified Data.Map as M
+import qualified Data.Text.Lazy as T
 import Data.Set(Set)
 import qualified Data.Set as S
 
-import Text.PrettyPrint.HughesPJ
+import Text.PrettyPrint.Leijen.Text hiding ((<$>))
 
 import Debug.Trace
 
@@ -912,4 +913,4 @@ instance JTypeCheck JStat where
     typecheck BreakStat = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
 
-typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ renderStyle (style {mode = OneLineMode}) (renderJs stat))
+typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ (T.unpack . displayT . renderCompact $ renderJs stat))

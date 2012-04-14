@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -45,15 +45,22 @@ import Data.Char (toLower,isControl)
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.Text.Lazy as T
 import Data.Generics
 import Data.Monoid(Monoid, mappend, mempty)
 
 import Numeric(showHex)
 import Safe
 import Text.JSON
-import Text.PrettyPrint.HughesPJ as PP
+import Text.PrettyPrint.Leijen.Text hiding ((<$>))
+
+import qualified Text.PrettyPrint.Leijen.Text as PP
 
 import Language.Javascript.JMacro.Types
+
+-- wl-pprint-text compatibility with pretty
+x $+$ y = x PP.<$> y
+x $$ y  = align (x $+$ y)
 
 {--------------------------------------------------------------------
   ADTs
@@ -462,7 +469,7 @@ instance JsToDoc JStat where
         where l' = map (\(c,s) -> text "case" <+> parens (jsToDoc c) <> char ':' $$ nest 2 (jsToDoc [s])) l ++ [text "default:" $$ nest 2 (jsToDoc [d])]
               cases = vcat l'
     jsToDoc (ReturnStat e) = text "return" <+> jsToDoc e
-    jsToDoc (ApplStat e es) = jsToDoc e <> (parens . fsep . punctuate comma $ map jsToDoc es)
+    jsToDoc (ApplStat e es) = jsToDoc e <> (parens . fillSep . punctuate comma $ map jsToDoc es)
     jsToDoc (TryStat s i s1 s2) = text "try" $$ braceNest' (jsToDoc s) $$ mbCatch $$ mbFinally
         where mbCatch | s1 == BlockStat [] = PP.empty
                       | otherwise = text "catch" <> parens (jsToDoc i) $$ braceNest' (jsToDoc s1)
@@ -470,9 +477,9 @@ instance JsToDoc JStat where
                         | otherwise = text "finally" $$ braceNest' (jsToDoc s2)
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
     jsToDoc (PPostStat isPre op x)
-        | isPre = text op <> jsToDoc x
-        | otherwise = jsToDoc x <> text op
-    jsToDoc (AntiStat s) = text $ "`(" ++ s ++ ")`"
+        | isPre = text (T.pack op) <> jsToDoc x
+        | otherwise = jsToDoc x <> text (T.pack op)
+    jsToDoc (AntiStat s) = text . T.pack $ "`(" ++ s ++ ")`"
     jsToDoc (ForeignStat i t) = text "//foriegn" <+> jsToDoc i <+> text "::" <+> jsToDoc t
     jsToDoc (BlockStat xs) = jsToDoc (flattenBlocks xs)
         where flattenBlocks (BlockStat y:ys) = flattenBlocks y ++ flattenBlocks ys
@@ -484,35 +491,35 @@ instance JsToDoc JExpr where
     jsToDoc (SelExpr x y) = cat [jsToDoc x <> char '.', jsToDoc y]
     jsToDoc (IdxExpr x y) = jsToDoc x <> brackets (jsToDoc y)
     jsToDoc (IfExpr x y z) = parens (jsToDoc x <+> char '?' <+> jsToDoc y <+> char ':' <+> jsToDoc z)
-    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text op', jsToDoc y]
+    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text (T.pack op), jsToDoc y]
         where op' | op == "++" = "+"
                   | otherwise = op
 
     jsToDoc (PPostExpr isPre op x)
-        | isPre = text op <> jsToDoc x
-        | otherwise = jsToDoc x <> text op
+        | isPre = text (T.pack op) <> jsToDoc x
+        | otherwise = jsToDoc x <> text (T.pack op)
 
-    jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fsep . punctuate comma $ map jsToDoc xs)
+    jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fillSep . punctuate comma $ map jsToDoc xs)
     jsToDoc (NewExpr e) = text "new" <+> jsToDoc e
-    jsToDoc (AntiExpr s) = text $ "`(" ++ s ++ ")`"
+    jsToDoc (AntiExpr s) = text . T.pack $ "`(" ++ s ++ ")`"
     jsToDoc (TypeExpr b e t)  = parens $ jsToDoc e <+> text (if b then "/* ::!" else "/* ::") <+> jsToDoc t <+> text "*/"
     jsToDoc (UnsatExpr e) = jsToDoc $ sat_ e
 
 instance JsToDoc JVal where
     jsToDoc (JVar i) = jsToDoc i
-    jsToDoc (JList xs) = brackets . fsep . punctuate comma $ map jsToDoc xs
+    jsToDoc (JList xs) = brackets . fillSep . punctuate comma $ map jsToDoc xs
     jsToDoc (JDouble d) = double d
     jsToDoc (JInt i) = integer i
-    jsToDoc (JStr s) = text ("\""++encodeJson s++"\"")
-    jsToDoc (JRegEx s) = text ("/"++s++"/")
+    jsToDoc (JStr s) = text . T.pack $ "\""++encodeJson s++"\""
+    jsToDoc (JRegEx s) = text . T.pack $ "/"++s++"/"
     jsToDoc (JHash m)
             | M.null m = text "{}"
-            | otherwise = braceNest . fsep . punctuate comma . map (\(x,y) -> quotes (text x) <> colon <+> jsToDoc y) $ M.toList m
-    jsToDoc (JFunc is b) = parens $ text "function" <> parens (fsep . punctuate comma . map jsToDoc $ is) $$ braceNest' (jsToDoc b)
+            | otherwise = braceNest . fillSep . punctuate comma . map (\(x,y) -> squotes (text (T.pack x)) <> colon <+> jsToDoc y) $ M.toList m
+    jsToDoc (JFunc is b) = parens $ text "function" <> parens (fillSep . punctuate comma . map jsToDoc $ is) $$ braceNest' (jsToDoc b)
     jsToDoc (UnsatVal f) = jsToDoc $ sat_ f
 
 instance JsToDoc Ident where
-    jsToDoc (StrI s) = text s
+    jsToDoc (StrI s) = text (T.pack s)
 
 instance JsToDoc [JExpr] where
     jsToDoc = vcat . map ((<> semi) . jsToDoc)
@@ -526,14 +533,14 @@ instance JsToDoc JType where
     jsToDoc JTBool = text "Bool"
     jsToDoc JTStat = text "()"
     jsToDoc JTImpossible = text "_|_" -- "⊥"
-    jsToDoc (JTForall vars t) = text "forall" <+> fsep  (punctuate comma (map ppRef vars)) <> text "." <+> jsToDoc t
-    jsToDoc (JTFunc args ret) = fsep . punctuate (text " ->") . map ppType $ args' ++ [ret]
+    jsToDoc (JTForall vars t) = text "forall" <+> fillSep  (punctuate comma (map ppRef vars)) <> text "." <+> jsToDoc t
+    jsToDoc (JTFunc args ret) = fillSep . punctuate (text " ->") . map ppType $ args' ++ [ret]
         where args'
                | null args = [JTStat]
                | otherwise = args
     jsToDoc (JTList t) = brackets $ jsToDoc t
     jsToDoc (JTMap t) = text "Map" <+> ppType t
-    jsToDoc (JTRecord t mp) = braces (fsep . punctuate comma . map (\(x,y) -> text x <+> text "::" <+> jsToDoc y) $ M.toList mp) <+> text "[" <> jsToDoc t <> text "]"
+    jsToDoc (JTRecord t mp) = braces (fillSep . punctuate comma . map (\(x,y) -> text (T.pack x) <+> text "::" <+> jsToDoc y) $ M.toList mp) <+> text "[" <> jsToDoc t <> text "]"
     jsToDoc (JTFree ref) = ppRef ref
     jsToDoc (JTRigid ref cs) = text "[" <> ppRef ref <> text "]"
 {-
@@ -547,14 +554,14 @@ instance JsToDoc JLocalType where
 
 ppConstraintList cs
     | null cs = Nothing
-    | otherwise = Just . parens . fsep . punctuate comma $ map go cs
+    | otherwise = Just . parens . fillSep . punctuate comma $ map go cs
     where
       go (vr,Sub   t') = ppRef vr   <+> text "<:" <+> jsToDoc t'
       go (vr,Super t') = jsToDoc t' <+> text "<:" <+> ppRef vr
 
 
-ppRef (Just n,_) = text n
-ppRef (_,i) = text $ "t_"++show i
+ppRef (Just n,_) = text . T.pack $ n
+ppRef (_,i) = text . T.pack $ "t_"++show i
 ppType x@(JTFunc _ _) = parens $ jsToDoc x
 ppType x@(JTMap _) = parens $ jsToDoc x
 ppType x = jsToDoc x
