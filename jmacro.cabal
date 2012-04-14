@@ -11,7 +11,6 @@ Tested-With:         GHC == 7.0.2
 Build-Type:          Simple
 Cabal-Version:       >= 1.6
 
-
 library
   build-depends:     base >= 4, base < 5, containers, pretty, safe >= 0.2, parsec > 3.0, template-haskell >= 2.3, mtl > 1.1 , haskell-src-exts, haskell-src-meta, bytestring >= 0.9, syb, json, web-encodings > 0.2, regex-posix > 0.9
 
@@ -26,9 +25,21 @@ library
                      Language.Javascript.JMacro.ParseTH
   ghc-options:       -Wall
 
+flag benchmarks
+  description: Build the benchmarks
+  default: False
+
 executable jmacro
   build-depends: parseargs
   main-is: Language/Javascript/JMacro/Executable.hs
+
+executable jmacro-bench
+  build-depends: criterion
+  main-is: Language/Javascript/JMacro/Benchmark.hs
+  if flag(benchmarks)
+    buildable: True
+  else
+    buildable: False
 
 source-repository head
   type:      darcs
