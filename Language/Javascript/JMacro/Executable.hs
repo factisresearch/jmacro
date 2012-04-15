@@ -1,5 +1,6 @@
 module Main where
 
+import Text.PrettyPrint.Leijen.Text (hPutDoc)
 import Control.Applicative
 import Control.Monad
 import Language.Javascript.JMacro
@@ -17,7 +18,7 @@ main = do
    let s = gotArg args "Scope"
    infile <- getArgStdio args "Infile" ReadMode
    outfile <- getArgStdio args "Outfile" WriteMode
-   either (hPrint stderr) (hPrint outfile) . parseIt s =<< hGetContents infile
+   either (hPrint stderr) (hPutDoc outfile) . parseIt s =<< hGetContents infile
   where
     parseIt True  = onRight (renderJs . scopify)  . parseJM
     parseIt False = onRight (renderJs . fixIdent) . parseJM
