@@ -747,7 +747,7 @@ myStringLiteral t = do
     _ <- char t
     x <- concat <$> many myChar
     _ <- char t
-    return $ decodeJson x
+    decodeJson x
  where myChar = do
          c <- noneOf [t]
          case c of
@@ -757,7 +757,7 @@ myStringLiteral t = do
            _ -> return [c]
 
 -- Taken from json package by Sigbjorn Finne.
-decodeJson :: String -> String
+decodeJson :: String -> JMParser String
 decodeJson x = parse [] x
  where
   parse rs cs =
@@ -765,12 +765,12 @@ decodeJson x = parse [] x
       '\\' : c : ds -> esc rs c ds
       c    : ds
        | c >= '\x20' && c <= '\xff'    -> parse (c:rs) ds
-       | c < '\x20'     -> error $ "Illegal unescaped character in string: " ++ x
+       | c < '\x20'     -> fail $ "Illegal unescaped character in string: " ++ x
        | i <= 0x10ffff  -> parse (c:rs) ds
-       | otherwise -> error $ "Illegal unescaped character in string: " ++ x
+       | otherwise -> fail $ "Illegal unescaped character in string: " ++ x
        where
         i = (fromIntegral (fromEnum c) :: Integer)
-      [] -> reverse rs
+      [] -> return $ reverse rs
 
   esc rs c cs = case c of
    '\\' -> parse ('\\' : rs) cs
@@ -786,9 +786,9 @@ decodeJson x = parse [] x
                case readHex [d1,d2,d3,d4] of
                  [(n,"")] -> parse (toEnum n : rs) cs'
 
-                 x -> error $ "Unable to parse JSON String: invalid hex: " ++ (show x)
-             _ -> error $ "Unable to parse JSON String: invalid hex: " ++ cs
-   _ ->  error $ "Unable to parse JSON String: invalid escape char: " ++ [c]
+                 x -> fail $ "Unable to parse JSON String: invalid hex: " ++ (show x)
+             _ -> fail $ "Unable to parse JSON String: invalid hex: " ++ cs
+   _ ->  fail $ "Unable to parse JSON String: invalid escape char: " ++ [c]
 
 --tricky bit to deal with regex literals and comments / / -- if we hit // inside, then we fail, since that isn't ending the regex but introducing a comment, and thus the initial / could not have introduced a regex.
 regexLiteral :: JMParser String
