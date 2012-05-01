@@ -44,8 +44,9 @@ import Language.Javascript.JMacro.Types
 import Language.Javascript.JMacro.ParseTH
 
 import System.IO.Unsafe
+import Numeric(readHex)
 
-import Web.Encodings
+-- import Web.Encodings
 
 --import Debug.Trace
 
@@ -754,6 +755,40 @@ myStringLiteral t = do
                   c2 <- anyChar
                   return [c,c2]
            _ -> return [c]
+
+-- Taken from json package by Sigbjorn Finne.
+decodeJson :: String -> String
+decodeJson x = parse [] x
+ where
+  parse rs cs =
+    case cs of
+      '\\' : c : ds -> esc rs c ds
+      c    : ds
+       | c >= '\x20' && c <= '\xff'    -> parse (c:rs) ds
+       | c < '\x20'     -> error $ "Illegal unescaped character in string: " ++ x
+       | i <= 0x10ffff  -> parse (c:rs) ds
+       | otherwise -> error $ "Illegal unescaped character in string: " ++ x
+       where
+        i = (fromIntegral (fromEnum c) :: Integer)
+      [] -> reverse rs
+
+  esc rs c cs = case c of
+   '\\' -> parse ('\\' : rs) cs
+   '"'  -> parse ('"'  : rs) cs
+   'n'  -> parse ('\n' : rs) cs
+   'r'  -> parse ('\r' : rs) cs
+   't'  -> parse ('\t' : rs) cs
+   'f'  -> parse ('\f' : rs) cs
+   'b'  -> parse ('\b' : rs) cs
+   '/'  -> parse ('/'  : rs) cs
+   'u'  -> case cs of
+             d1 : d2 : d3 : d4 : cs' ->
+               case readHex [d1,d2,d3,d4] of
+                 [(n,"")] -> parse (toEnum n : rs) cs'
+
+                 x -> error $ "Unable to parse JSON String: invalid hex: " ++ (show x)
+             _ -> error $ "Unable to parse JSON String: invalid hex: " ++ cs
+   _ ->  error $ "Unable to parse JSON String: invalid escape char: " ++ [c]
 
 --tricky bit to deal with regex literals and comments / / -- if we hit // inside, then we fail, since that isn't ending the regex but introducing a comment, and thus the initial / could not have introduced a regex.
 regexLiteral :: JMParser String
