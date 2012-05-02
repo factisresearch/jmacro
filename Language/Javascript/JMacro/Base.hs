@@ -59,6 +59,7 @@ import qualified Text.PrettyPrint.Leijen.Text as PP
 import Language.Javascript.JMacro.Types
 
 -- wl-pprint-text compatibility with pretty
+infixl 5 $$, $+$
 x $+$ y = x PP.<$> y
 x $$ y  = align (x $+$ y)
 
@@ -443,10 +444,10 @@ renderPrefixJs :: (JsToDoc a, JMacro a) => String -> a -> Doc
 renderPrefixJs pfx = jsToDoc . jsSaturate (Just $ "jmId_"++pfx)
 
 braceNest :: Doc -> Doc
-braceNest x = char '{' $$ nest 2 x $$ char '}'
+braceNest x = char '{' <+> nest 2 x $$ char '}'
 
 braceNest' :: Doc -> Doc
-braceNest' x = char '{' $+$ nest 2 x $$ char '}'
+braceNest' x = nest 2 (char '{' $+$ x) $$ char '}'
 
 class JsToDoc a
     where jsToDoc :: a -> Doc
