@@ -12,7 +12,7 @@ Build-Type:          Simple
 Cabal-Version:       >= 1.6
 
 library
-  build-depends:     base >= 4, base < 5, containers, pretty, safe >= 0.2, parsec > 3.0, template-haskell >= 2.3, mtl > 1.1 , haskell-src-exts, haskell-src-meta, bytestring >= 0.9, syb, json, web-encodings > 0.2, regex-posix > 0.9
+  build-depends:     base >= 4, base < 5, containers, wl-pprint-text, text, safe >= 0.2, parsec > 3.0, template-haskell >= 2.3, mtl > 1.1 , haskell-src-exts, haskell-src-meta, bytestring >= 0.9, syb, json, regex-posix > 0.9
 
   exposed-modules:   Language.Javascript.JMacro
                      Language.Javascript.JMacro.Util
