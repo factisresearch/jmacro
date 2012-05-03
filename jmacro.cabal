@@ -1,5 +1,5 @@
 name:                jmacro
-version:             0.5.8
+version:             0.6.0
 synopsis:            QuasiQuotation library for programmatic generation of Javascript code.
 description:         Javascript syntax, functional syntax, hygienic names, compile-time guarantees of syntactic correctness, limited typechecking. Additional documentation available at <http://www.haskell.org/haskellwiki/Jmacro>
 category:            Language
@@ -34,10 +34,10 @@ executable jmacro
   main-is: Language/Javascript/JMacro/Executable.hs
 
 executable jmacro-bench
-  build-depends: criterion
   main-is: Language/Javascript/JMacro/Benchmark.hs
   if flag(benchmarks)
     buildable: True
+    build-depends: criterion
   else
     buildable: False
 
