@@ -42,8 +42,6 @@ import Control.Monad.Identity
 
 import Data.Function
 import Data.Char (toLower,isControl)
-import Data.Maybe (fromMaybe)
-import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.Text.Lazy as T
 import Data.Generics
@@ -60,7 +58,9 @@ import Language.Javascript.JMacro.Types
 
 -- wl-pprint-text compatibility with pretty
 infixl 5 $$, $+$
+($+$) :: Doc -> Doc -> Doc
 x $+$ y = x PP.<$> y
+($$) :: Doc -> Doc -> Doc
 x $$ y  = align (x $+$ y)
 
 {--------------------------------------------------------------------
@@ -69,6 +69,7 @@ x $$ y  = align (x $+$ y)
 
 newtype IdentSupply a = IS {runIdentSupply :: State [Ident] a} deriving Typeable
 
+inIdentSupply :: (State [Ident] a -> State [Ident] b) -> IdentSupply a -> IdentSupply b
 inIdentSupply f x = IS $ f (runIdentSupply x)
 
 instance Data a => Data (IdentSupply a) where
@@ -122,8 +123,12 @@ data JStat = DeclStat   Ident (Maybe JLocalType)
            | UnsatBlock (IdentSupply JStat)
            | AntiStat   String
            | ForeignStat Ident JLocalType
-           | BreakStat
+           | LabelStat JsLabel JStat
+           | BreakStat (Maybe JsLabel)
+           | ContinueStat (Maybe JsLabel)
              deriving (Eq, Ord, Show, Data, Typeable)
+
+type JsLabel = String
 
 
 instance Monoid JStat where
@@ -258,7 +263,9 @@ instance Compos MultiComp where
            UnsatBlock _ -> ret v'
            AntiStat _ -> ret v'
            ForeignStat i t -> ret ForeignStat `app` f i `app` ret t
-           BreakStat -> ret BreakStat
+           ContinueStat l -> ret (ContinueStat l)
+           BreakStat l -> ret (BreakStat l)
+           LabelStat l s -> ret (LabelStat l) `app` f s
         MExpr v' -> ret MExpr `app` case v' of
            ValExpr e -> ret ValExpr `app` f e
            SelExpr e e' -> ret SelExpr `app` f e `app` f e'
@@ -462,7 +469,17 @@ instance JsToDoc JStat where
                        Just tp -> text " /* ::" <+> jsToDoc tp <+> text "*/"
     jsToDoc (WhileStat p b)  = text "while" <> parens (jsToDoc p) $$ braceNest' (jsToDoc b)
     jsToDoc (UnsatBlock e) = jsToDoc $ sat_ e
-    jsToDoc BreakStat = text "break"
+
+    jsToDoc (BreakStat l) = maybe (text "break") (((<+>) `on` text) "break" . T.pack) l
+    jsToDoc (ContinueStat l) = maybe (text "continue") (((<+>) `on` text) "continue" . T.pack) l
+    jsToDoc (LabelStat l s) = text (T.pack l) <> char ':' $$ printBS s
+        where
+          printBS (BlockStat ss) = vcat $ interSemi $ flattenBlocks ss
+          printBS x = jsToDoc x
+          interSemi [x] = [jsToDoc x]
+          interSemi [] = []
+          interSemi (x:xs) = (jsToDoc x <> semi) : interSemi xs
+
     jsToDoc (ForInStat each i e b) = text txt <> parens (text "var" <+> jsToDoc i <+> text "in" <+> jsToDoc e) $$ braceNest' (jsToDoc b)
         where txt | each = "for each"
                   | otherwise = "for"
@@ -478,27 +495,34 @@ instance JsToDoc JStat where
                         | otherwise = text "finally" $$ braceNest' (jsToDoc s2)
     jsToDoc (AssignStat i x) = jsToDoc i <+> char '=' <+> jsToDoc x
     jsToDoc (PPostStat isPre op x)
-        | isPre = text (T.pack op) <> jsToDoc x
-        | otherwise = jsToDoc x <> text (T.pack op)
+        | isPre = text (T.pack op) <> optParens x
+        | otherwise = optParens x <> text (T.pack op)
     jsToDoc (AntiStat s) = text . T.pack $ "`(" ++ s ++ ")`"
     jsToDoc (ForeignStat i t) = text "//foriegn" <+> jsToDoc i <+> text "::" <+> jsToDoc t
     jsToDoc (BlockStat xs) = jsToDoc (flattenBlocks xs)
-        where flattenBlocks (BlockStat y:ys) = flattenBlocks y ++ flattenBlocks ys
-              flattenBlocks (y:ys) = y : flattenBlocks ys
-              flattenBlocks [] = []
+
+flattenBlocks :: [JStat] -> [JStat]
+flattenBlocks (BlockStat y:ys) = flattenBlocks y ++ flattenBlocks ys
+flattenBlocks (y:ys) = y : flattenBlocks ys
+flattenBlocks [] = []
+
+optParens :: JExpr -> Doc
+optParens x = case x of
+                (PPostExpr _ _ _) -> parens (jsToDoc x)
+                _ -> jsToDoc x
 
 instance JsToDoc JExpr where
     jsToDoc (ValExpr x) = jsToDoc x
     jsToDoc (SelExpr x y) = cat [jsToDoc x <> char '.', jsToDoc y]
     jsToDoc (IdxExpr x y) = jsToDoc x <> brackets (jsToDoc y)
     jsToDoc (IfExpr x y z) = parens (jsToDoc x <+> char '?' <+> jsToDoc y <+> char ':' <+> jsToDoc z)
-    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text (T.pack op), jsToDoc y]
+    jsToDoc (InfixExpr op x y) = parens $ sep [jsToDoc x, text (T.pack op'), jsToDoc y]
         where op' | op == "++" = "+"
                   | otherwise = op
 
     jsToDoc (PPostExpr isPre op x)
-        | isPre = text (T.pack op) <> jsToDoc x
-        | otherwise = jsToDoc x <> text (T.pack op)
+        | isPre = text (T.pack op) <> optParens x
+        | otherwise = optParens x <> text (T.pack op)
 
     jsToDoc (ApplExpr je xs) = jsToDoc je <> (parens . fillSep . punctuate comma $ map jsToDoc xs)
     jsToDoc (NewExpr e) = text "new" <+> jsToDoc e
@@ -553,6 +577,7 @@ instance JsToDoc JType where
 instance JsToDoc JLocalType where
     jsToDoc (cs,t) = maybe (text "") (<+> text "=> ") (ppConstraintList cs) <> jsToDoc t
 
+ppConstraintList :: Show a => [((Maybe String, a), Constraint)] -> Maybe Doc
 ppConstraintList cs
     | null cs = Nothing
     | otherwise = Just . parens . fillSep . punctuate comma $ map go cs
@@ -560,9 +585,11 @@ ppConstraintList cs
       go (vr,Sub   t') = ppRef vr   <+> text "<:" <+> jsToDoc t'
       go (vr,Super t') = jsToDoc t' <+> text "<:" <+> ppRef vr
 
-
+ppRef :: Show a => (Maybe String, a) -> Doc
 ppRef (Just n,_) = text . T.pack $ n
 ppRef (_,i) = text . T.pack $ "t_"++show i
+
+ppType :: JType -> Doc
 ppType x@(JTFunc _ _) = parens $ jsToDoc x
 ppType x@(JTMap _) = parens $ jsToDoc x
 ppType x = jsToDoc x
@@ -749,6 +776,8 @@ instance ToJExpr JSValue where
 -------------------------
 
 -- Taken from json package by Sigbjorn Finne.
+
+encodeJson :: String -> String
 encodeJson = concatMap encodeJsonChar
 
 encodeJsonChar :: Char -> String

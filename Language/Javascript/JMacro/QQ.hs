@@ -17,7 +17,6 @@ import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1,
 import Control.Applicative hiding ((<|>),many,optional,(<*))
 import Control.Arrow(first)
 import Control.Monad.State.Strict
-import qualified Data.ByteString.Char8 as BS
 import Data.Char(digitToInt, toLower, isUpper)
 import Data.List(isPrefixOf, sort)
 import Data.Generics(extQ,Data)
@@ -48,7 +47,7 @@ import Numeric(readHex)
 
 -- import Web.Encodings
 
---import Debug.Trace
+-- import Debug.Trace
 
 {--------------------------------------------------------------------
   QuasiQuotation
@@ -233,7 +232,7 @@ lexer = P.makeTokenParser jsLang
 
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
-           P.reservedNames = ["var","return","if","else","while","for","in","break","new","function","switch","case","default","fun","try","catch","finally","foreign"],
+           P.reservedNames = ["var","return","if","else","while","for","in","break","continue","new","function","switch","case","default","fun","try","catch","finally","foreign"],
            P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!",":|","@"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
@@ -357,6 +356,7 @@ patternBinding = do
 patternBlocks :: JMParser ([Ident],[JStat])
 patternBlocks = fmap concat . unzip . zipWith (\i efr -> either (\f -> (i, f i)) id efr) (map (StrI . ("jmId_match_" ++) . show) [(1::Int)..]) <$> many patternBinding
 
+destructuringDecl :: JMParser [JStat]
 destructuringDecl = do
     (i,patDecls) <- either (\f -> (matchVar, f matchVar)) id <$> patternBinding
     optAssignStat <- optionMaybe $ do
@@ -386,6 +386,7 @@ statement = declStat
             <|> functionDecl
             <|> foreignStat
             <|> returnStat
+            <|> labelStat
             <|> ifStat
             <|> whileStat
             <|> switchStat
@@ -395,6 +396,7 @@ statement = declStat
             <|> tryStat
             <|> applStat
             <|> breakStat
+            <|> continueStat
             <|> antiStat
           <?> "statement"
     where
@@ -457,7 +459,7 @@ statement = declStat
         return $ [SwitchStat e l (l2s d)]
 
       caseStat =
-        reserved "case" >> liftM2 (,) expr (char ':' >> l2s <$> statblock0)
+        reserved "case" >> liftM2 (,) expr (char ':' >> l2s <$> statblock)
 
       tryStat = do
         reserved "try"
@@ -541,7 +543,20 @@ statement = declStat
       expr2stat' _ = fail "Value expression used as statement"
 -}
 
-      breakStat = reserved "break" >> return [BreakStat]
+      breakStat = do
+        reserved "break"
+        l <- optionMaybe myIdent
+        return [BreakStat l]
+
+      continueStat = do
+        reserved "continue"
+        l <- optionMaybe myIdent
+        return [ContinueStat l]
+
+      labelStat = do
+        lbl <- try $ myIdent <* char ':'
+        s <- l2s <$> statblock0
+        return [LabelStat lbl s]
 
       antiStat  = return . AntiStat <$> do
         x <- (try (symbol "`(") >> anyChar `manyTill` try (symbol ")`"))
@@ -552,6 +567,7 @@ statement = declStat
 --args :: JMParser [JExpr]
 --args = parens $ commaSep expr
 
+compileRegex :: String -> Either WrapError Regex
 compileRegex s = unsafePerformIO $ compile co eo s
     where co = compExtended
           eo = execBlank
@@ -664,7 +680,7 @@ around' :: Char -> Char -> JMParser a -> JMParser a
 around' a b x = lexeme (char a) >> (lexeme x <* char b)
 
 myIdent :: JMParser String
-myIdent = lexeme $ many1 (alphaNum <|> oneOf "_-!@#$%^&*();") <|> myStringLiteral '\''
+myIdent = lexeme $ many1 (alphaNum <|> oneOf "_-!@#$%^&*()") <|> myStringLiteral '\''
 
 ident' :: JMParser Ident
 ident' = do

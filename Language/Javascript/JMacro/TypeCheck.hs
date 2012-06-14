@@ -910,7 +910,7 @@ instance JTypeCheck JStat where
       return JTStat
     typecheck (UnsatBlock _) = undefined --oyvey
     typecheck (AntiStat _) = undefined --oyvey
-    typecheck BreakStat = return JTStat
+    typecheck (BreakStat _) = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
 
 typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ (T.unpack . displayT . renderCompact $ renderJs stat))
