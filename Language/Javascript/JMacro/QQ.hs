@@ -501,11 +501,11 @@ statement = declStat
         b <- statement
         return $ jFor' before after p b
           where threeStat =
-                    liftM3 (,,) (statement)
-                                (expr)
-                                (semi >> statement)
-                jFor' :: (ToJExpr a) => [JStat] -> a -> [JStat] -> [JStat] -> [JStat]
-                jFor' before p after bs = before ++ [WhileStat (toJExpr p) b']
+                    liftM3 (,,) (option [] statement <* semi)
+                                (optionMaybe expr <* semi)
+                                (option [] statement)
+                jFor' :: [JStat] -> Maybe JExpr -> [JStat]-> [JStat] -> [JStat]
+                jFor' before p after bs = before ++ [WhileStat (fromMaybe (jsv "true") p) b']
                     where b' = BlockStat $ bs ++ after
 
       assignOpStat = do
