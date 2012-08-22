@@ -36,7 +36,7 @@ module Language.Javascript.JMacro.Base (
   ) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
 import Control.Applicative hiding (empty)
-import Control.Arrow (second)
+import Control.Arrow ((***))
 import Control.Monad.State.Strict
 import Control.Monad.Identity
 
@@ -44,12 +44,15 @@ import Data.Function
 import Data.Char (toLower,isControl)
 import qualified Data.Map as M
 import qualified Data.Text.Lazy as T
+import qualified Data.Text as TS
 import Data.Generics
 import Data.Monoid(Monoid, mappend, mempty)
 
 import Numeric(showHex)
 import Safe
-import Text.JSON
+import Data.Aeson
+import qualified Data.Vector as V
+import qualified Data.HashMap.Strict as HM
 import Text.PrettyPrint.Leijen.Text hiding ((<$>))
 
 import qualified Text.PrettyPrint.Leijen.Text as PP
@@ -62,6 +65,7 @@ infixl 5 $$, $+$
 x $+$ y = x PP.<$> y
 ($$) :: Doc -> Doc -> Doc
 x $$ y  = align (x $+$ y)
+x $$$ y = align (nest 2 $ x $+$ y)
 
 {--------------------------------------------------------------------
   ADTs
@@ -484,7 +488,7 @@ instance JsToDoc JStat where
         where txt | each = "for each"
                   | otherwise = "for"
     jsToDoc (SwitchStat e l d) = text "switch" <+> parens (jsToDoc e) $$ braceNest' cases
-        where l' = map (\(c,s) -> text "case" <+> parens (jsToDoc c) <> char ':' $$ nest 2 (jsToDoc [s])) l ++ [text "default:" $$ nest 2 (jsToDoc [d])]
+        where l' = map (\(c,s) -> (text "case" <+> parens (jsToDoc c) <> char ':') $$$ (jsToDoc s)) l ++ [text "default:" $$$ (jsToDoc d)]
               cases = vcat l'
     jsToDoc (ReturnStat e) = text "return" <+> jsToDoc e
     jsToDoc (ApplStat e es) = jsToDoc e <> (parens . fillSep . punctuate comma $ map jsToDoc es)
@@ -763,15 +767,14 @@ jtFromList t y = JTRecord t $ M.fromList y
 nullStat :: JStat
 nullStat = BlockStat []
 
-
--- JSON instance
-instance ToJExpr JSValue where
-    toJExpr JSNull             = ValExpr $ JVar $ StrI "null"
-    toJExpr (JSBool b)         = ValExpr $ JVar $ StrI $ map toLower (show b)
-    toJExpr (JSRational b rat) = ValExpr $ JDouble $ realToFrac rat
-    toJExpr (JSString s)       = ValExpr $ JStr $ fromJSString s
-    toJExpr (JSArray vs)       = ValExpr $ JList $ map toJExpr vs
-    toJExpr (JSObject obj)     = ValExpr $ JHash $ M.fromList $ map (second toJExpr) $ fromJSObject obj
+-- Aeson instance
+instance ToJExpr Value where
+    toJExpr Null             = ValExpr $ JVar $ StrI "null"
+    toJExpr (Bool b)         = ValExpr $ JVar $ StrI $ map toLower (show b)
+    toJExpr (Number n)       = ValExpr $ JDouble $ realToFrac n
+    toJExpr (String s)       = ValExpr $ JStr $ TS.unpack s
+    toJExpr (Array vs)       = ValExpr $ JList $ map toJExpr $ V.toList vs
+    toJExpr (Object obj)     = ValExpr $ JHash $ M.fromList $ map (TS.unpack *** toJExpr) $ HM.toList obj
 
 -------------------------
 
