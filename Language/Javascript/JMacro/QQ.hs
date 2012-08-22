@@ -233,7 +233,7 @@ lexer = P.makeTokenParser jsLang
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
            P.reservedNames = ["var","return","if","else","while","for","in","break","continue","new","function","switch","case","default","fun","try","catch","finally","foreign"],
-           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","++","===",">=","<=","->","::","::!",":|","@"],
+           P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","<<=", ">>=", ">>>=", "&=", "^=", "|=", "--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","&", "^", "|", "++","===","!==", ">=","<=","!", "~", "<<", ">>", ">>>", "->","::","::!",":|","@"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
            P.commentLine = "//",
@@ -516,6 +516,12 @@ statement = declStat
                                                <|> rop "*="
                                                <|> rop "/="
                                                <|> rop "%="
+                                               <|> rop "<<="
+                                               <|> rop ">>="
+                                               <|> rop ">>>="
+                                               <|> rop "&="
+                                               <|> rop "^="
+                                               <|> rop "|="
                                               )
           let gofail = fail ("Invalid assignment.")
           case e1 of
@@ -593,13 +599,19 @@ expr = do
           let ans = (IfExpr e t el)
           addIf ans <|> return ans
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
-    table = [[iop "*", iop "/", iop "%"],
+    table = [[pop "~", pop "!"],
+             [iop "*", iop "/", iop "%"],
              [pop "++", pop "--"],
              [iop "++", iop "+", iop "-", iop "--"],
+             [iop "<<", iop ">>", iop ">>>"],
              [consOp],
              [iope "==", iope "!=", iope "<", iope ">",
-              iope ">=", iope "<=", iope "==="],
-             [iop "&&", iop "||"],
+              iope ">=", iope "<=", iope "===", iope "!=="],
+             [iop "&"],
+             [iop "^"],
+             [iop "|"],
+             [iop "&&"],
+             [iop "||"],
              [applOp, applOpRev]
             ]
     pop  s  = Prefix (reservedOp s >> return (PPostExpr True s))
