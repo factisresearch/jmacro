@@ -501,7 +501,7 @@ statement = declStat
         b <- statement
         return $ jFor' before after p b
           where threeStat =
-                    liftM3 (,,) (option [] statement <* semi)
+                    liftM3 (,,) (option [] statement <* optional semi)
                                 (optionMaybe expr <* semi)
                                 (option [] statement)
                 jFor' :: [JStat] -> Maybe JExpr -> [JStat]-> [JStat] -> [JStat]
@@ -560,7 +560,10 @@ statement = declStat
         return [ContinueStat l]
 
       labelStat = do
-        lbl <- try $ myIdent <* char ':'
+        lbl <- try $ do
+                    l <- myIdent <* char ':'
+                    guard (l /= "default")
+                    return l
         s <- l2s <$> statblock0
         return [LabelStat lbl s]
 
