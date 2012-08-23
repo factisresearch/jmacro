@@ -115,8 +115,8 @@ instance Show a => Show (IdentSupply a) where
 data JStat = DeclStat   Ident (Maybe JLocalType)
            | ReturnStat JExpr
            | IfStat     JExpr JStat JStat
-           | WhileStat  JExpr JStat
-           | ForInStat  Bool Ident JExpr JStat
+           | WhileStat  Bool JExpr JStat -- bool is "do"
+           | ForInStat  Bool Ident JExpr JStat -- bool is "each"
            | SwitchStat JExpr [(JExpr, JStat)] JStat
            | TryStat    JStat Ident JStat JStat
            | BlockStat  [JStat]
@@ -254,7 +254,7 @@ instance Compos MultiComp where
            DeclStat i t -> ret DeclStat `app` f i `app` ret t
            ReturnStat i -> ret ReturnStat `app` f i
            IfStat e s s' -> ret IfStat `app` f e `app` f s `app` f s'
-           WhileStat e s -> ret WhileStat `app` f e `app` f s
+           WhileStat b e s -> ret (WhileStat b) `app` f e `app` f s
            ForInStat b i e s -> ret (ForInStat b) `app` f i `app` f e `app` f s
            SwitchStat e l d -> ret SwitchStat `app` f e `app` l' `app` f d
                where l' = mapM' (\(c,s) -> ret (,) `app` f c `app` f s) l
@@ -470,7 +470,8 @@ instance JsToDoc JStat where
         where rest = case t of
                        Nothing -> text ""
                        Just tp -> text " /* ::" <+> jsToDoc tp <+> text "*/"
-    jsToDoc (WhileStat p b)  = text "while" <> parens (jsToDoc p) $$ braceNest' (jsToDoc b)
+    jsToDoc (WhileStat False p b)  = text "while" <> parens (jsToDoc p) $$ braceNest' (jsToDoc b)
+    jsToDoc (WhileStat True  p b)  = (text "do" $$ braceNest' (jsToDoc b)) $+$ text "while" <+> parens (jsToDoc p)
     jsToDoc (UnsatBlock e) = jsToDoc $ sat_ e
 
     jsToDoc (BreakStat l) = maybe (text "break") (((<+>) `on` text) "break" . T.pack) l
@@ -743,7 +744,7 @@ jsv :: String -> JExpr
 jsv = ValExpr . JVar . StrI
 
 jFor :: (ToJExpr a, ToStat b) => JStat -> a -> JStat -> b -> JStat
-jFor before p after b = BlockStat [before, WhileStat (toJExpr p) b']
+jFor before p after b = BlockStat [before, WhileStat False (toJExpr p) b']
     where b' = case toStat b of
                  BlockStat xs -> BlockStat $ xs ++ [after]
                  x -> BlockStat [x,after]

@@ -230,7 +230,7 @@ lexer = P.makeTokenParser jsLang
 
 jsLang :: P.LanguageDef ()
 jsLang = javaStyle {
-           P.reservedNames = ["var","return","if","else","while","for","in","break","continue","new","function","switch","case","default","fun","try","catch","finally","foreign"],
+           P.reservedNames = ["var","return","if","else","while","for","in","break","continue","new","function","switch","case","default","fun","try","catch","finally","foreign","do"],
            P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","<<=", ">>=", ">>>=", "&=", "^=", "|=", "--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","&", "^", "|", "++","===","!==", ">=","<=","!", "~", "<<", ">>", ">>>", "->","::","::!",":|","@"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
@@ -389,6 +389,7 @@ statement = declStat
             <|> whileStat
             <|> switchStat
             <|> forStat
+            <|> doWhileStat
             <|> braces statblock
             <|> assignOpStat
             <|> tryStat
@@ -447,8 +448,11 @@ statement = declStat
           else return $ [IfStat p b nullStat]
 
       whileStat =
-          reserved "while" >> liftM2 (\e b -> [WhileStat e (l2s b)])
+          reserved "while" >> liftM2 (\e b -> [WhileStat False e (l2s b)])
                               (parens expr) statementOrEmpty
+
+      doWhileStat = reserved "do" >> liftM2 (\b e -> [WhileStat True e (l2s b)])
+                    statementOrEmpty (reserved "while" *> parens expr)
 
       switchStat = do
         reserved "switch"
@@ -503,7 +507,7 @@ statement = declStat
                                 (optionMaybe expr <* semi)
                                 (option [] statement)
                 jFor' :: [JStat] -> Maybe JExpr -> [JStat]-> [JStat] -> [JStat]
-                jFor' before p after bs = before ++ [WhileStat (fromMaybe (jsv "true") p) b']
+                jFor' before p after bs = before ++ [WhileStat False (fromMaybe (jsv "true") p) b']
                     where b' = BlockStat $ bs ++ after
 
       assignOpStat = do

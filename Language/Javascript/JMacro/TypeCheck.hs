@@ -906,7 +906,7 @@ instance JTypeCheck JStat where
     typecheck (IfStat e s s1) = do
                             typecheck e <<:> return JTBool
                             join $ liftA2 (\x y -> someUpperBound [x,y]) (typecheck s) (typecheck s1)
-    typecheck (WhileStat e s) = do
+    typecheck (WhileStat _ e s) = do
                             typecheck e <<:> return JTBool
                             typecheck s
     typecheck (ForInStat _ _ _ _) = undefined -- yipe!

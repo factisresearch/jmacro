@@ -43,7 +43,7 @@ ifElse :: (ToJExpr a, ToStat b, ToStat c) => a -> b -> c -> JStat
 ifElse x y z = IfStat (toJExpr x) (toStat y) (toStat z)
 
 while :: ToJExpr a => a -> JStat -> JStat
-while x y = WhileStat (toJExpr x) y
+while x y = WhileStat False (toJExpr x) y
 
 return :: ToJExpr a => a -> JStat
 return x = ReturnStat (toJExpr x)
