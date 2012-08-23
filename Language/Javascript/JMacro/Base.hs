@@ -61,9 +61,8 @@ import Language.Javascript.JMacro.Types
 
 -- wl-pprint-text compatibility with pretty
 infixl 5 $$, $+$
-($+$) :: Doc -> Doc -> Doc
+($+$), ($$), ($$$) :: Doc -> Doc -> Doc
 x $+$ y = x PP.<$> y
-($$) :: Doc -> Doc -> Doc
 x $$ y  = align (x $+$ y)
 x $$$ y = align (nest 2 $ x $+$ y)
 

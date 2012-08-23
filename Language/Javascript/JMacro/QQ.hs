@@ -45,8 +45,6 @@ import Language.Javascript.JMacro.ParseTH
 import System.IO.Unsafe
 import Numeric(readHex)
 
--- import Web.Encodings
-
 -- import Debug.Trace
 
 {--------------------------------------------------------------------
@@ -789,35 +787,35 @@ myStringLiteral t = do
 
 -- Taken from json package by Sigbjorn Finne.
 decodeJson :: String -> JMParser String
-decodeJson x = parse [] x
+decodeJson x = parseIt [] x
  where
-  parse rs cs =
+  parseIt rs cs =
     case cs of
       '\\' : c : ds -> esc rs c ds
       c    : ds
-       | c >= '\x20' && c <= '\xff'    -> parse (c:rs) ds
+       | c >= '\x20' && c <= '\xff'    -> parseIt (c:rs) ds
        | c < '\x20'     -> fail $ "Illegal unescaped character in string: " ++ x
-       | i <= 0x10ffff  -> parse (c:rs) ds
+       | i <= 0x10ffff  -> parseIt (c:rs) ds
        | otherwise -> fail $ "Illegal unescaped character in string: " ++ x
        where
         i = (fromIntegral (fromEnum c) :: Integer)
       [] -> return $ reverse rs
 
   esc rs c cs = case c of
-   '\\' -> parse ('\\' : rs) cs
-   '"'  -> parse ('"'  : rs) cs
-   'n'  -> parse ('\n' : rs) cs
-   'r'  -> parse ('\r' : rs) cs
-   't'  -> parse ('\t' : rs) cs
-   'f'  -> parse ('\f' : rs) cs
-   'b'  -> parse ('\b' : rs) cs
-   '/'  -> parse ('/'  : rs) cs
+   '\\' -> parseIt ('\\' : rs) cs
+   '"'  -> parseIt ('"'  : rs) cs
+   'n'  -> parseIt ('\n' : rs) cs
+   'r'  -> parseIt ('\r' : rs) cs
+   't'  -> parseIt ('\t' : rs) cs
+   'f'  -> parseIt ('\f' : rs) cs
+   'b'  -> parseIt ('\b' : rs) cs
+   '/'  -> parseIt ('/'  : rs) cs
    'u'  -> case cs of
              d1 : d2 : d3 : d4 : cs' ->
                case readHex [d1,d2,d3,d4] of
-                 [(n,"")] -> parse (toEnum n : rs) cs'
+                 [(n,"")] -> parseIt (toEnum n : rs) cs'
 
-                 x -> fail $ "Unable to parse JSON String: invalid hex: " ++ (show x)
+                 badHex -> fail $ "Unable to parse JSON String: invalid hex: " ++ show badHex
              _ -> fail $ "Unable to parse JSON String: invalid hex: " ++ cs
    _ ->  fail $ "Unable to parse JSON String: invalid escape char: " ++ [c]
 

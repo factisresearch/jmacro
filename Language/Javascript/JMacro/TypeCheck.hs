@@ -4,10 +4,8 @@ module Language.Javascript.JMacro.TypeCheck where
 
 import Language.Javascript.JMacro.Base
 import Language.Javascript.JMacro.Types
-import Language.Javascript.JMacro.QQ
 
 import Control.Applicative
-import Control.Arrow((&&&))
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Reader
@@ -15,7 +13,7 @@ import Control.Monad.Writer
 import Control.Monad.Error
 import Data.Either
 import Data.Map (Map)
-import Data.Maybe(catMaybes, fromMaybe)
+import Data.Maybe(catMaybes)
 import Data.List(intercalate, nub, transpose)
 import qualified Data.Traversable as T
 import qualified Data.Foldable as F
@@ -26,10 +24,10 @@ import qualified Data.Set as S
 
 import Text.PrettyPrint.Leijen.Text hiding ((<$>))
 
-import Debug.Trace
 
 -- Utility
 
+isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _ = False
 
@@ -75,6 +73,7 @@ instance Show TCState where
         "frozen: " ++ show frozen ++ "\n" ++
         "varCt: " ++ show varCt
 
+tcStateEmpty :: TCState
 tcStateEmpty = TCS [M.empty] M.empty [S.empty] S.empty 0 []
 
 newtype TMonad a = TMonad (ErrorT String (State TCState) a) deriving (Functor, Monad, MonadState TCState, MonadError String)
@@ -86,8 +85,10 @@ instance Applicative TMonad where
 class JTypeCheck a where
     typecheck :: a -> TMonad JType
 
+evalTMonad :: TMonad a -> Either String a
 evalTMonad (TMonad x) = evalState (runErrorT x) tcStateEmpty
 
+runTMonad :: TMonad a -> (Either String a, TCState)
 runTMonad (TMonad x) = runState (runErrorT x) tcStateEmpty
 
 withContext :: TMonad a -> TMonad String -> TMonad a
@@ -130,6 +131,7 @@ freeVarsWithNames x =
         let n' = mkUnique ns n 0
         put (M.insert ref (Left n') m, S.insert n' ns, ct)
 
+      mkUnique :: Set String -> String -> Int -> String
       mkUnique ns n i
           | n' `S.member` ns = mkUnique ns n (i + 1)
           | otherwise = n'
@@ -146,6 +148,8 @@ freeVarsWithNames x =
                     where (q,r) = divMod i 26
                           letter = toEnum (fromEnum 'a' + r)
 
+
+prettyType :: JType -> TMonad String
 prettyType x = do
   xt <- resolveType x
   names <- freeVarsWithNames xt
@@ -191,20 +195,25 @@ tyErr2Sub t t' = tyErr2ext "Couldn't apply subtype relation" "Subtype" "Supertyp
 prettyEnv :: TMonad [Map Ident String]
 prettyEnv = mapM (T.mapM prettyType) . tc_env =<< get
 
+runTypecheckRaw :: JTypeCheck a => a -> (Either String JType, TCState)
 runTypecheckRaw x = runTMonad (typecheckMain x)
 
+runTypecheckFull :: JTypeCheck a => a -> (Either String (String, [Map Ident String]), TCState)
 runTypecheckFull x = runTMonad $ do
                        r <- prettyType =<< typecheckMain x
                        e <- prettyEnv
                        return (r,e)
 
+runTypecheck :: JTypeCheck a => a -> Either String String
 runTypecheck x = evalTMonad $ prettyType =<< typecheckMain x
 
+evalTypecheck :: JTypeCheck a => a -> Either String [Map Ident String]
 evalTypecheck x = evalTMonad $ do
                     _ <- typecheckMain x
                     e <- prettyEnv
                     return e
 
+typecheckMain :: JTypeCheck a => a -> TMonad JType
 typecheckMain x = go `catchError` handler
     where go = do
             r <- typecheck x
@@ -217,6 +226,7 @@ typecheckMain x = go `catchError` handler
 
 -- Manipulating VarRefs and Constraints
 
+addToStack :: Ord a => a -> [Set a] -> [Set a]
 addToStack v (s:ss) = S.insert v s : ss
 addToStack _ _ = error "addToStack: no sets" --[S.singleton v]
 
@@ -234,6 +244,7 @@ mapConstraint :: (Monad m, Functor m) => (JType -> m JType) -> Constraint -> m C
 mapConstraint f (Sub t) = Sub <$> f t
 mapConstraint f (Super t) = Super <$> f t
 
+partitionCs :: [Constraint] -> ([JType],[JType])
 partitionCs [] = ([],[])
 partitionCs (Sub t:cs) = (t:subs,sups)
     where (subs,sups) = partitionCs cs
@@ -409,6 +420,7 @@ addConstraint vr@(_,ref) c = case c of
       normalizeConstraints cl = putCs =<< cannonicalizeConstraints cl
 
 
+cannonicalizeConstraints :: [Constraint] -> TMonad [Constraint]
 cannonicalizeConstraints constraintList = do
         -- trace ("ccl: " ++ show constraintList) $ return ()
         let (subs,restCs)  = findForallSubs constraintList
@@ -536,6 +548,7 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
 
       unifyGroup :: [Int] -> ReaderT [Either Int Int] TMonad ()
       unifyGroup (vr:vrs) = lift $ mapM_ (\x -> instantiateVarRef (Nothing, x) (JTFree (Nothing,vr))) vrs
+      unifyGroup [] = return ()
 
       findLoop i cs@(c:_) = go [] cs
           where
@@ -575,6 +588,7 @@ setFrozen x = modify (\s -> s {tc_frozen = tc_frozen s `S.union` x})
 
 -- addRefsToStack x = modify (\s -> s {tc_stack = F.foldr addToStack (tc_stack s) x })
 
+frame2VarRefs :: Set t -> [(Maybe a, t)]
 frame2VarRefs frame = (\x -> (Nothing,x)) <$> S.toList frame
 
 addEnv :: Ident -> JType -> TMonad ()
@@ -752,6 +766,7 @@ x <: y = do
         | M.isSubmapOfBy (\_ _ -> True) ym xm = xt <: yt >> intersectionWithM (<:) xm ym >> return () --TODO not right?
     go xt yt = tyErr2Sub xt yt
 
+(<<:>) :: TMonad JType -> TMonad JType -> TMonad ()
 x <<:> y = join $ liftA2 (<:) x y
 
 someUpperBound :: [JType] -> TMonad JType
@@ -770,6 +785,7 @@ someLowerBound xs = do
 --  b <- (mapM_ (res <:) xs >> return True) `catchError` \e -> return False
 --  if b then return res else return JTImpossible
 
+(=.=) :: JType -> JType -> TMonad JType
 x =.= y = do
       x <: y
       y <: x
@@ -799,7 +815,7 @@ instance JTypeCheck JExpr where
         | s `elem` ["==","/="] = do
                             et <- typecheck e
                             e1t <- typecheck e1
-                            et =.= e1t
+                            _ <- et =.= e1t
                             return JTBool
         | s `elem` ["||","&&"] = setFixed JTBool >> return JTBool
         | otherwise = throwError $ "Unhandled operator: " ++ s
@@ -860,7 +876,7 @@ instance JTypeCheck JVal where
     typecheck (JInt _) = return JTNum
     typecheck (JDouble _) = return JTNum
     typecheck (JStr _) = return JTString
-    typecheck (JList xs) = typecheck (JHash $ M.fromList $ zip (map show [0..]) xs)
+    typecheck (JList xs) = typecheck (JHash $ M.fromList $ zip (map show [(0::Int)..]) xs)
                            -- fmap JTList . someUpperBound =<< mapM typecheck xs
     typecheck (JRegEx _) = undefined --regex object
     typecheck (JHash mp) = do
@@ -913,4 +929,5 @@ instance JTypeCheck JStat where
     typecheck (BreakStat _) = return JTStat
     typecheck (ForeignStat i t) = integrateLocalType t >>= addEnv i >> return JTStat
 
+typecheckWithBlock :: (JsToDoc a, JMacro a, JTypeCheck a) => a -> TMonad JType
 typecheckWithBlock stat = typecheck stat `withContext` (return $ "In statement: " ++ (T.unpack . displayT . renderCompact $ renderJs stat))

@@ -48,6 +48,8 @@ type JLocalType = ([(VarRef,Constraint)], JType)
 
 type TypeParserState = (Int, Map String Int)
 
+type TypeParser a = CharParser TypeParserState a
+
 typLang :: P.LanguageDef TypeParserState
 typLang = emptyDef {
            P.reservedNames = ["()","->"],
@@ -56,18 +58,17 @@ typLang = emptyDef {
            P.identStart  = letter <|> oneOf "_$"
           }
 
+lexer :: P.TokenParser TypeParserState
 lexer = P.makeTokenParser typLang
 
-whiteSpace= P.whiteSpace lexer
-symbol    = P.symbol lexer
+reservedOp :: String -> TypeParser ()
+parens, braces, brackets, lexeme :: TypeParser a -> TypeParser a
+identifier :: TypeParser String
+commaSep, commaSep1 :: TypeParser a -> TypeParser [a]
 parens    = P.parens lexer
 braces    = P.braces lexer
 brackets  = P.brackets lexer
-dot       = P.dot lexer
-colon     = P.colon lexer
-semi      = P.semi lexer
 identifier= P.identifier lexer
-reserved  = P.reserved lexer
 reservedOp= P.reservedOp lexer
 commaSep1 = P.commaSep1 lexer
 commaSep  = P.commaSep  lexer
@@ -77,8 +78,10 @@ lexeme    = P.lexeme lexer
 parseType :: String -> Either ParseError JType
 parseType s = runParser anyType (0,M.empty) "" s
 
+parseConstrainedType :: String -> Either ParseError JLocalType
 parseConstrainedType s = runParser constrainedType (0,M.empty) "" s
 
+runTypeParser :: CharParser a JLocalType
 runTypeParser = withLocalState (0,M.empty) (try (parens constrainedType) <|> constrainedType) -- anyType
 
 withLocalState :: (Functor m, Monad m) => st -> ParsecT s st m a -> ParsecT s st' m a
@@ -90,7 +93,6 @@ withLocalState initState subParser = mkPT $
                   go (Error e) = (Error e)
 
 
-type TypeParser a = CharParser TypeParserState a
 
 constrainedType :: TypeParser JLocalType
 constrainedType = do
@@ -115,9 +117,9 @@ anyType = try (parens anyType) <|> funOrAtomType <|> listType <|> recordType
 funOrAtomType :: TypeParser JType
 funOrAtomType = do
   r <- anyNestedType `sepBy1` (lexeme (string "->"))
-  return $ case r of
+  return $ case reverse r of
     [x] -> x
-    (x:xs) -> JTFunc (init r) (last r)
+    (x:xs) -> JTFunc (reverse xs) x
     _ -> error "funOrAtomType"
 
 listType :: TypeParser JType
@@ -126,6 +128,7 @@ listType = JTList <$> brackets anyType
 anyNestedType :: TypeParser JType
 anyNestedType = nullType <|> parens anyType <|> atomicType <|> listType <|> recordType
 
+nullType :: TypeParser JType
 nullType = reservedOp "()" >> return JTStat
 
 atomicType :: TypeParser JType
@@ -135,8 +138,8 @@ atomicType = do
     "Num" -> return JTNum
     "String" -> return JTString
     "Bool" -> return JTBool
-    (x:xs) | isUpper x -> fail $ "Unknown type: " ++ a
-           | otherwise -> JTFree <$> freeVarRef a
+    (x:_) | isUpper x -> fail $ "Unknown type: " ++ a
+          | otherwise -> JTFree <$> freeVarRef a
     _ -> error "typeAtom"
 
 recordType :: TypeParser JType
