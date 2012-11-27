@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, FlexibleInstances, PatternGuards #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, FlexibleInstances, PatternGuards, RankNTypes #-}
 
 module Language.Javascript.JMacro.TypeCheck where
 
@@ -7,6 +7,7 @@ import Language.Javascript.JMacro.Types
 
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Identity
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Writer
@@ -51,6 +52,34 @@ unionWithM f m1 m2 = T.sequence $ M.unionWith (\xm ym -> join $ liftM2 f xm ym) 
 
 intersectionWithM :: (Monad m, Ord key) => (val -> val -> m b) -> Map key val -> Map key val -> m (Map key b)
 intersectionWithM f m1 m2 = T.sequence $ M.intersectionWith f m1 m2
+
+class Compos1 t where
+    compos1 :: (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b)
+           -> (t -> m t) -> t -> m t
+
+instance Compos1 JType where
+    compos1 ret app f v =
+        case v of
+          JTFunc args body -> ret JTFunc `app` mapM' f args `app` f body
+          JTForall vars t -> ret JTForall `app` ret vars `app` f t
+          JTList t -> ret JTList `app` f t
+          JTMap t -> ret JTMap `app` f t
+          JTRecord t m -> ret JTRecord `app` f t `app` m'
+              where (ls,ts) = unzip $ M.toList m
+                    m' = ret (M.fromAscList . zip ls) `app` mapM' f ts
+          x -> ret x
+      where
+        mapM' g = foldr (app . app (ret (:)) . g) (ret [])
+
+composOp1 :: Compos1 t => (t -> t) -> t -> t
+composOp1 f = runIdentity . composOpM1 (Identity . f)
+composOpM1 :: (Compos1 t, Monad m) => (t -> m t) -> t -> m t
+composOpM1 = compos1 return ap
+composOpM1_ :: (Compos1 t, Monad m) => (t -> m ()) -> t -> m ()
+composOpM1_ = composOpFold1 (return ()) (>>)
+composOpFold1 :: Compos1 t => b -> (b -> b -> b) -> (t -> b) -> t -> b
+composOpFold1 z c f = unC . compos1 (\_ -> C z) (\(C x) (C y) -> C (c x y)) (C . f)
+newtype C b a = C { unC :: b }
 
 -- Basic Types and TMonad
 data StoreVal = SVType JType
@@ -111,7 +140,7 @@ freeVarsWithNames x =
       go :: JType -> StateT (Map Int (Either String Int), Set String, Int) TMonad ()
       go (JTFree vr) = handleVR vr
       go (JTRigid vr cs) = handleVR vr >> traversem_ (go . fromC) cs
-      go v = composOpM_ go v
+      go v = composOpM1_ go v
 
       handleVR (mbName, ref) = do
         (m,ns,ct) <- get
@@ -155,7 +184,7 @@ prettyType x = do
   names <- freeVarsWithNames xt
   let replaceNames (JTFree ref) = JTFree $ fixRef ref
       replaceNames (JTForall refs t) = JTForall (map fixRef refs) $ replaceNames t
-      replaceNames v = composOp replaceNames v
+      replaceNames v = composOp1 replaceNames v
 
       fixRef (_,ref) = (M.lookup ref names, ref)
 
@@ -285,7 +314,7 @@ instantiateVarRef vr@(_,ref) t = do
 occursCheck :: Int -> JType -> TMonad ()
 occursCheck ref (JTFree (_,i))
   | i == ref = tyErr1 "Occurs check: cannot construct infinite type" (JTFree (Nothing,i))
-occursCheck ref x = composOpM_ (occursCheck ref) x
+occursCheck ref x = composOpM1_ (occursCheck ref) x
 
 checkConstraints :: JType -> [Constraint] -> TMonad ()
 checkConstraints t cs = mapM_ go cs
@@ -631,7 +660,7 @@ resolveTypeGen f typ = go typ
           Just (SVType t) -> return Nothing
           _ -> return $ Just x
 
-resolveType = resolveTypeGen composOpM
+resolveType = resolveTypeGen composOpM1
 resolveTypeShallow = resolveTypeGen (const return)
 
 --TODO create proper bounds for records
@@ -658,7 +687,7 @@ integrateLocalType (env,typ) = do
           (Super t) -> lift . (<: newTy) =<< cloneType t
 
       cloneType (JTFree vr) = getRef vr
-      cloneType x = composOpM cloneType x
+      cloneType x = composOpM1 cloneType x
 
 lookupEnv :: Ident -> TMonad JType
 lookupEnv ident = resolveType =<< go . tc_env =<< get
@@ -671,7 +700,7 @@ lookupEnv ident = resolveType =<< go . tc_env =<< get
 freeVars :: JType -> TMonad (Set Int)
 freeVars t = execWriterT . go =<< resolveType t
     where go (JTFree (_, ref)) = tell (S.singleton ref)
-          go x = composOpM_ go x
+          go x = composOpM1_ go x
 
 --only works on resolved types
 instantiateScheme :: [VarRef] -> JType -> TMonad JType
@@ -689,7 +718,7 @@ instantiateScheme vrs t = evalStateT (go t) M.empty
                            put $ M.insert ref (JTFree newRef) m
                            mapM_ (lift . addConstraint newRef <=< mapConstraint go) =<< lift (lookupConstraintsList vr)
                            return (JTFree newRef)
-      go x = composOpM go x
+      go x = composOpM1 go x
 
 --only works on resolved types
 instantiateRigidScheme :: [VarRef] -> JType -> TMonad JType
@@ -706,7 +735,7 @@ instantiateRigidScheme vrs t = evalStateT (go t) M.empty
                            newRef <- JTRigid vr . S.fromList <$> lift (lookupConstraintsList vr)
                            put $ M.insert ref newRef m
                            return newRef
-      go x = composOpM go x
+      go x = composOpM1 go x
 
 --only works on resolved types
 checkEscapedVars :: [VarRef] -> JType -> TMonad ()
@@ -716,7 +745,7 @@ checkEscapedVars vrs t = go t
       go t@(JTRigid (_,ref) _)
           | ref `S.member` vs = tyErr1 "Qualified var escapes into environment" t
           | otherwise = return ()
-      go x = composOpM_ go x
+      go x = composOpM1_ go x
 
 -- Subtyping
 (<:) :: JType -> JType -> TMonad ()

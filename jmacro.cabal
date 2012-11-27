@@ -19,7 +19,7 @@ library
                      Language.Javascript.JMacro.TypeCheck
                      Language.Javascript.JMacro.Types
                      Language.Javascript.JMacro.Prelude
-                     Language.Javascript.JMacro.Rpc
+                     -- Language.Javascript.JMacro.Rpc
   other-modules:     Language.Javascript.JMacro.Base
                      Language.Javascript.JMacro.QQ
                      Language.Javascript.JMacro.ParseTH

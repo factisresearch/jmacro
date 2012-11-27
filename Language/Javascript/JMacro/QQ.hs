@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, TemplateHaskell, QuasiQuotes #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, TypeFamilies, TemplateHaskell, QuasiQuotes, RankNTypes, GADTs #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -93,11 +93,12 @@ quoteJMExpE s = case parseJME s of
 -- Don't replace identifiers on the right hand side of selector
 -- expressions.
 antiIdent :: JMacro a => String -> a -> a
-antiIdent s e = fromMC $ go (toMC e)
-    where go (MExpr (ValExpr (JVar (StrI s'))))
-             | s == s' = MExpr (AntiExpr $ fixIdent s)
-          go (MExpr (SelExpr x i)) =
-              MExpr (SelExpr (antiIdent s x) i)
+antiIdent s e = jfromGADT $ go (jtoGADT e)
+    where go :: forall a. JMGadt a -> JMGadt a
+          go (JMGExpr (ValExpr (JVar (StrI s'))))
+             | s == s' = JMGExpr (AntiExpr $ fixIdent s)
+          go (JMGExpr (SelExpr x i)) =
+              JMGExpr (SelExpr (antiIdent s x) i)
           go x = composOp go x
 
 antiIdents :: JMacro a => [String] -> a -> a
@@ -623,7 +624,7 @@ expr = do
     iop  s  = Infix (reservedOp s >> return (InfixExpr s)) AssocLeft
     iope s  = Infix (reservedOp s >> return (InfixExpr s)) AssocNone
     applOp  = Infix (reservedOp "<|" >> return (\x y -> ApplExpr x [y])) AssocRight
-    applOpRev  = Infix (reservedOp "|>" >> return (\x y -> ApplExpr y [x])) AssocLeft
+    applOpRev = Infix (reservedOp "|>" >> return (\x y -> ApplExpr y [x])) AssocLeft
     consOp  = Infix (reservedOp ":|" >> return consAct) AssocRight
     consAct x y = ApplExpr (ValExpr (JFunc [StrI "x",StrI "y"] (BlockStat [BlockStat [DeclStat (StrI "tmp") Nothing, AssignStat tmpVar (ApplExpr (SelExpr (ValExpr (JVar (StrI "x"))) (StrI "slice")) [ValExpr (JInt 0)]),ApplStat (SelExpr tmpVar (StrI "unshift")) [ValExpr (JVar (StrI "y"))],ReturnStat tmpVar]]))) [x,y]
         where tmpVar = ValExpr (JVar (StrI "tmp"))

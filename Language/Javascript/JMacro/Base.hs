@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables, GADTs #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -16,7 +16,7 @@ module Language.Javascript.JMacro.Base (
   -- * ADT
   JStat(..), JExpr(..), JVal(..), Ident(..), IdentSupply(..),
   -- * Generic traversal (via compos)
-  JMacro(..), MultiComp(..), Compos(..),
+  JMacro(..), JMGadt(..), Compos(..),
   composOp, composOpM, composOpM_, composOpFold,
   -- * Hygienic transformation
   withHygiene, scopify,
@@ -191,66 +191,64 @@ expr2stat _ = nullStat
 {--------------------------------------------------------------------
   Compos
 --------------------------------------------------------------------}
+-- | Compos and ops for generic traversal as defined over
+-- the JMacro ADT.
 
 -- | Utility class to coerce the ADT into a regular structure.
 class JMacro a where
-    toMC :: a -> MultiComp
-    fromMC :: MultiComp -> a
+    jtoGADT :: a -> JMGadt a
+    jfromGADT :: JMGadt a -> a
+
+instance JMacro Ident where
+    jtoGADT = JMGId
+    jfromGADT (JMGId x) = x
+    jfromGADT _ = error "impossible"
+
+instance JMacro JStat where
+    jtoGADT = JMGStat
+    jfromGADT (JMGStat x) = x
+    jfromGADT _ = error "impossible"
+    
+instance JMacro JExpr where
+    jtoGADT = JMGExpr
+    jfromGADT (JMGExpr x) = x
+    jfromGADT _ = error "impossible"
+
+instance JMacro JVal where
+    jtoGADT = JMGVal 
+    jfromGADT (JMGVal x) = x
+    jfromGADT _ = error "impossible"
 
 -- | Union type to allow regular traversal by compos.
-data MultiComp = MStat JStat | MExpr JExpr | MVal JVal | MIdent Ident deriving Show
+data JMGadt a where
+    JMGId   :: Ident -> JMGadt Ident
+    JMGStat :: JStat -> JMGadt JStat
+    JMGExpr :: JExpr -> JMGadt JExpr
+    JMGVal  :: JVal  -> JMGadt JVal
 
 
--- | Compos and ops for generic traversal as defined over
--- the JMacro ADT.
-class Compos t where
-    compos :: (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b)
-           -> (t -> m t) -> t -> m t
-
-
-composOp :: Compos t => (t -> t) -> t -> t
+composOp :: Compos t => (forall a. t a -> t a) -> t b -> t b
 composOp f = runIdentity . composOpM (Identity . f)
-composOpM :: (Compos t, Monad m) => (t -> m t) -> t -> m t
+composOpM :: (Compos t, Monad m) => (forall a. t a -> m (t a)) -> t b -> m (t b)
 composOpM = compos return ap
-composOpM_ :: (Compos t, Monad m) => (t -> m ()) -> t -> m ()
+composOpM_ :: (Compos t, Monad m) => (forall a. t a -> m ()) -> t b -> m ()
 composOpM_ = composOpFold (return ()) (>>)
-composOpFold :: Compos t => b -> (b -> b -> b) -> (t -> b) -> t -> b
+composOpFold :: Compos t => b -> (b -> b -> b) -> (forall a. t a -> b) -> t c -> b
 composOpFold z c f = unC . compos (\_ -> C z) (\(C x) (C y) -> C (c x y)) (C . f)
 newtype C b a = C { unC :: b }
 
-instance JMacro Ident where
-    toMC = MIdent
-    fromMC (MIdent x) = x
-    fromMC _ = error "fromMC"
+class Compos t where
+    compos :: (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b)
+           -> (forall a. t a -> m (t a)) -> t c -> m (t c)
 
-instance JMacro JVal where
-    toMC = MVal
-    fromMC (MVal x) = x
-    fromMC _ = error "fromMC"
+instance Compos JMGadt where
+    compos = jmcompos
 
-instance JMacro JExpr where
-    toMC = MExpr
-    fromMC (MExpr x) = x
-    fromMC _ = error "fromMC"
-
-instance JMacro JStat where
-    toMC = MStat
-    fromMC (MStat x) = x
-    fromMC _ = error "fromMC"
-
-instance JMacro [JStat] where
-    toMC = MStat . BlockStat
-    fromMC (MStat (BlockStat x)) = x
-    fromMC _ = error "fromMC"
-
-
-instance Compos MultiComp where
-  compos = mcCompos
-    where
-     mcCompos :: forall m. (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b) -> (MultiComp -> m MultiComp) -> MultiComp -> m MultiComp
-     mcCompos ret app f' v = case v of
-        MIdent _ -> ret v
-        MStat v' -> ret MStat `app` case v' of
+jmcompos :: forall m c. (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b) -> (forall a. JMGadt a -> m (JMGadt a)) -> JMGadt c -> m (JMGadt c)
+jmcompos ret app f' v = 
+    case v of
+     JMGId _ -> ret v
+     JMGStat v' -> ret JMGStat `app` case v' of
            DeclStat i t -> ret DeclStat `app` f i `app` ret t
            ReturnStat i -> ret ReturnStat `app` f i
            IfStat e s s' -> ret IfStat `app` f e `app` f s `app` f s'
@@ -269,7 +267,7 @@ instance Compos MultiComp where
            ContinueStat l -> ret (ContinueStat l)
            BreakStat l -> ret (BreakStat l)
            LabelStat l s -> ret (LabelStat l) `app` f s
-        MExpr v' -> ret MExpr `app` case v' of
+     JMGExpr v' -> ret JMGExpr `app` case v' of
            ValExpr e -> ret ValExpr `app` f e
            SelExpr e e' -> ret SelExpr `app` f e `app` f e'
            IdxExpr e e' -> ret IdxExpr `app` f e `app` f e'
@@ -281,7 +279,7 @@ instance Compos MultiComp where
            AntiExpr _ -> ret v'
            TypeExpr b e t -> ret (TypeExpr b) `app` f e `app` ret t
            UnsatExpr _ -> ret v'
-        MVal v' -> ret MVal `app` case v' of
+     JMGVal v' -> ret JMGVal `app` case v' of
            JVar i -> ret JVar `app` f i
            JList xs -> ret JList `app` mapM' f xs
            JDouble _ -> ret v'
@@ -293,25 +291,12 @@ instance Compos MultiComp where
                      m' = ret (M.fromAscList . zip ls) `app` mapM' f vs
            JFunc xs s -> ret JFunc `app` mapM' f xs `app` f s
            UnsatVal _ -> ret v'
-      where
-        mapM' :: (a -> m a) -> [a] -> m [a]
-        mapM' g = foldr (app . app (ret (:)) . g) (ret [])
-        f :: JMacro a => a -> m a
-        f x = ret fromMC `app` f' (toMC x)
 
-instance Compos JType where
-    compos ret app f v =
-        case v of
-          JTFunc args body -> ret JTFunc `app` mapM' f args `app` f body
-          JTForall vars t -> ret JTForall `app` ret vars `app` f t
-          JTList t -> ret JTList `app` f t
-          JTMap t -> ret JTMap `app` f t
-          JTRecord t m -> ret JTRecord `app` f t `app` m'
-              where (ls,ts) = unzip $ M.toList m
-                    m' = ret (M.fromAscList . zip ls) `app` mapM' f ts
-          x -> ret x
-      where
-        mapM' g = foldr (app . app (ret (:)) . g) (ret [])
+  where
+    mapM' :: forall a. (a -> m a) -> [a] -> m [a]
+    mapM' g = foldr (app . app (ret (:)) . g) (ret [])
+    f :: forall b. JMacro b => b -> m b
+    f x = ret jfromGADT `app` f' (jtoGADT x)
 
 {--------------------------------------------------------------------
   New Identifiers
@@ -354,12 +339,14 @@ jsSaturate :: (JMacro a) => Maybe String -> a -> a
 jsSaturate str x = evalState (runIdentSupply $ jsSaturate_ x) (newIdentSupply str)
 
 jsSaturate_ :: (JMacro a) => a -> IdentSupply a
-jsSaturate_ e = IS $ fromMC <$> go (toMC e)
-    where go v = case v of
-                   MStat (UnsatBlock us) -> go =<< (MStat <$> runIdentSupply us)
-                   MExpr (UnsatExpr  us) -> go =<< (MExpr <$> runIdentSupply us)
-                   MVal  (UnsatVal   us) -> go =<< (MVal  <$> runIdentSupply us)
-                   _ -> composOpM go v
+jsSaturate_ e = IS $ jfromGADT <$> go (jtoGADT e)
+    where 
+      go :: forall a. JMGadt a -> State [Ident] (JMGadt a)
+      go v = case v of
+               JMGStat (UnsatBlock us) -> go =<< (JMGStat <$> runIdentSupply us)
+               JMGExpr (UnsatExpr  us) -> go =<< (JMGExpr <$> runIdentSupply us)
+               JMGVal  (UnsatVal   us) -> go =<< (JMGVal  <$> runIdentSupply us)
+               _ -> composOpM go v
 
 {--------------------------------------------------------------------
   Transformation
@@ -367,11 +354,13 @@ jsSaturate_ e = IS $ fromMC <$> go (toMC e)
 
 --doesn't apply to unsaturated bits
 jsReplace_ :: JMacro a => [(Ident, Ident)] -> a -> a
-jsReplace_ xs e = fromMC $ go (toMC e)
-    where go v = case v of
-                   MIdent i -> maybe v MIdent (M.lookup i mp)
+jsReplace_ xs e = jfromGADT $ go (jtoGADT e)
+    where 
+      go :: forall a. JMGadt a -> JMGadt a    
+      go v = case v of
+                   JMGId i -> maybe v JMGId (M.lookup i mp)
                    _ -> composOp go v
-          mp = M.fromList xs
+      mp = M.fromList xs
 
 --only works on fully saturated things
 jsUnsat_ :: JMacro a => [Ident] -> a -> IdentSupply a
@@ -385,28 +374,24 @@ jsUnsat_ xs e = IS $ do
 -- following the transformation. As the transformation preserves
 -- free variables, it is hygienic. Cannot be used nested.
 withHygiene:: JMacro a => (a -> a) -> a -> a
-withHygiene f x = fromMC $ case mx of
-              MStat _  -> toMC $ UnsatBlock (coerceMC <$> jsUnsat_ is' x'')
-              MExpr _  -> toMC $ UnsatExpr  (coerceMC <$> jsUnsat_ is' x'')
-              MVal  _  -> toMC $ UnsatVal   (coerceMC <$> jsUnsat_ is' x'')
-              MIdent _ -> toMC $ f x
+withHygiene f x = jfromGADT $ case mx of
+              JMGStat _  -> jtoGADT $ UnsatBlock (jsUnsat_ is' x'')
+              JMGExpr _  -> jtoGADT $ UnsatExpr  (jsUnsat_ is' x'')
+              JMGVal  _  -> jtoGADT $ UnsatVal   (jsUnsat_ is' x'')
+              JMGId _ -> jtoGADT $ f x
     where (x', (StrI l:_)) = runState (runIdentSupply $ jsSaturate_ x) is
           x'' = f x'
           is = newIdentSupply (Just "inSat")
           lastVal = readNote "inSat" (drop 6 l) :: Int
           is' = take lastVal is
-          mx = toMC x
-          coerceMC :: (JMacro a, JMacro b) => a -> b
-          coerceMC = fromMC . toMC
-
-
-
+          mx = jtoGADT x
 
 -- | Takes a fully saturated expression and transforms it to use unique variables that respect scope.
 scopify :: JStat -> JStat
-scopify x = evalState (fromMC <$> go (toMC x)) (newIdentSupply Nothing)
-    where go v = case v of
-                   (MStat (BlockStat ss)) -> MStat . BlockStat <$>
+scopify x = evalState (jfromGADT <$> go (jtoGADT x)) (newIdentSupply Nothing)
+    where go :: forall a. JMGadt a -> State [Ident] (JMGadt a)
+          go v = case v of
+                   (JMGStat (BlockStat ss)) -> JMGStat . BlockStat <$>
                                              blocks ss
                        where blocks [] = return []
                              blocks (DeclStat (StrI i) t : xs) =  case i of
@@ -417,26 +402,26 @@ scopify x = evalState (fromMC <$> go (toMC x)) (newIdentSupply Nothing)
                                   put st
                                   rest <- blocks xs
                                   return $ [DeclStat newI t `mappend` jsReplace_ [(StrI i, newI)] (BlockStat rest)]
-                             blocks (x':xs) = (fromMC <$> go (toMC x')) <:> blocks xs
+                             blocks (x':xs) = (jfromGADT <$> go (jtoGADT x')) <:> blocks xs
                              (<:>) = liftM2 (:)
-                   (MStat (ForInStat b (StrI i) e s)) -> do
+                   (JMGStat (ForInStat b (StrI i) e s)) -> do
                           (newI:st) <- get
                           put st
-                          rest <- fromMC <$> go (toMC s)
-                          return $ MStat . ForInStat b newI e $ jsReplace_ [(StrI i, newI)] rest
-                   (MStat (TryStat s (StrI i) s1 s2)) -> do
+                          rest <- jfromGADT <$> go (jtoGADT s)
+                          return $ JMGStat . ForInStat b newI e $ jsReplace_ [(StrI i, newI)] rest
+                   (JMGStat (TryStat s (StrI i) s1 s2)) -> do
                           (newI:st) <- get
                           put st
-                          t <- fromMC <$> go (toMC s)
-                          c <- fromMC <$> go (toMC s1)
-                          f <- fromMC <$> go (toMC s2)
-                          return . MStat . TryStat t newI (jsReplace_ [(StrI i, newI)] c) $ f
-                   (MExpr (ValExpr (JFunc is s))) -> do
+                          t <- jfromGADT <$> go (jtoGADT s)
+                          c <- jfromGADT <$> go (jtoGADT s1)
+                          f <- jfromGADT <$> go (jtoGADT s2)
+                          return . JMGStat . TryStat t newI (jsReplace_ [(StrI i, newI)] c) $ f
+                   (JMGExpr (ValExpr (JFunc is s))) -> do
                             st <- get
                             let (newIs,newSt) = splitAt (length is) st
                             put (newSt)
-                            rest <- fromMC <$> go (toMC s)
-                            return . MExpr . ValExpr $ JFunc newIs $ (jsReplace_ $ zip is newIs) rest
+                            rest <- jfromGADT <$> go (jtoGADT s)
+                            return . JMGExpr . ValExpr $ JFunc newIs $ (jsReplace_ $ zip is newIs) rest
                    _ -> composOpM go v
 
 {--------------------------------------------------------------------

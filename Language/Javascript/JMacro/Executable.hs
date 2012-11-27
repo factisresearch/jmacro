@@ -1,3 +1,5 @@
+{-# LANGUAGE GADTs, RankNTypes #-}
+
 module Main where
 
 import Text.PrettyPrint.Leijen.Text (hPutDoc)
@@ -26,8 +28,10 @@ main = do
     onRight f (Right x) = Right (f x)
     onRight _ (Left x) = (Left x)
 
-    fixIdent x = fromMC $ composOp go (toMC x) :: JStat
-        where go v = case v of
-                       (MStat (DeclStat (StrI ('!':'!':i')) t)) -> MStat (DeclStat (StrI i') t)
-                       (MStat (DeclStat (StrI ('!':i')) t)) -> MStat (DeclStat (StrI i') t)
+    fixIdent x = jfromGADT $ composOp go (jtoGADT x) :: JStat
+        where
+          go :: forall a. JMGadt a -> JMGadt a
+          go v = case v of
+                       (JMGStat (DeclStat (StrI ('!':'!':i')) t)) -> JMGStat (DeclStat (StrI i') t)
+                       (JMGStat (DeclStat (StrI ('!':i')) t)) -> JMGStat (DeclStat (StrI i') t)
                        _ -> composOp go v
