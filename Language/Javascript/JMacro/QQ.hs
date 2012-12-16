@@ -605,7 +605,7 @@ expr = do
           let ans = (IfExpr e t el)
           addIf ans <|> return ans
     rawExpr = buildExpressionParser table dotExpr <?> "expression"
-    table = [[pop "~", pop "!"],
+    table = [[pop "~", pop "!", negop],
              [iop "*", iop "/", iop "%"],
              [pop "++", pop "--"],
              [iop "++", iop "+", iop "-", iop "--"],
@@ -628,6 +628,10 @@ expr = do
     consOp  = Infix (reservedOp ":|" >> return consAct) AssocRight
     consAct x y = ApplExpr (ValExpr (JFunc [StrI "x",StrI "y"] (BlockStat [BlockStat [DeclStat (StrI "tmp") Nothing, AssignStat tmpVar (ApplExpr (SelExpr (ValExpr (JVar (StrI "x"))) (StrI "slice")) [ValExpr (JInt 0)]),ApplStat (SelExpr tmpVar (StrI "unshift")) [ValExpr (JVar (StrI "y"))],ReturnStat tmpVar]]))) [x,y]
         where tmpVar = ValExpr (JVar (StrI "tmp"))
+    negop   = Prefix (reservedOp "-" >> return negexp)
+    negexp (ValExpr (JDouble n)) = ValExpr (JDouble (-n))
+    negexp (ValExpr (JInt    n)) = ValExpr (JInt    (-n))
+    negexp x                     = PPostExpr True "-" x
 
 dotExpr :: JMParser JExpr
 dotExpr = do
@@ -663,9 +667,8 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
                 (const (return x))
                 (parseHSExp x)
 
-    valExpr = ValExpr <$> (num <|> negnum <|> str <|> try regex <|> list <|> hash <|> func <|> var) <?> "value"
+    valExpr = ValExpr <$> (num <|> str <|> try regex <|> list <|> hash <|> func <|> var) <?> "value"
         where num = either JInt JDouble <$> try natFloat
-              negnum = either (JInt . negate) (JDouble . negate) <$> try (char '-' >> natFloat)
               str   = JStr   <$> (myStringLiteral '"' <|> myStringLiteral '\'')
               regex = do
                 s <- regexLiteral --myStringLiteralNoBr '/'
