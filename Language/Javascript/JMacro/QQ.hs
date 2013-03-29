@@ -235,6 +235,8 @@ jsLang = javaStyle {
            P.reservedOpNames = ["|>","<|","+=","-=","*=","/=","%=","<<=", ">>=", ">>>=", "&=", "^=", "|=", "--","*","/","+","-",".","%","?","=","==","!=","<",">","&&","||","&", "^", "|", "++","===","!==", ">=","<=","!", "~", "<<", ">>", ">>>", "->","::","::!",":|","@"],
            P.identLetter = alphaNum <|> oneOf "_$",
            P.identStart  = letter <|> oneOf "_$",
+           P.opStart = oneOf "|+-/*%<>&^.?=!~:@",
+           P.opLetter = oneOf "|+-/*%<>&^.?=!~:@",
            P.commentLine = "//",
            P.commentStart = "/*",
            P.commentEnd = "*/"}
@@ -398,6 +400,7 @@ statement = declStat
             <|> breakStat
             <|> continueStat
             <|> antiStat
+            <|> antiStatSimple
           <?> "statement"
     where
       declStat = do
@@ -576,6 +579,12 @@ statement = declStat
                (const (return x))
                (parseHSExp x)
 
+      antiStatSimple  = return . AntiStat <$> do
+        x <- (symbol "`" >> anyChar `manyTill` symbol "`")
+        either (fail . ("Bad AntiQuotation: \n" ++))
+               (const (return x))
+               (parseHSExp x)
+
 --args :: JMParser [JExpr]
 --args = parens $ commaSep expr
 
@@ -642,7 +651,7 @@ dotExpr = do
     _ -> error "exprApp"
 
 dotExprOne :: JMParser JExpr
-dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> newExpr
+dotExprOne = addNxt =<< valExpr <|> antiExpr <|> antiExprSimple <|> parens' expr <|> notExpr <|> newExpr
   where
     addNxt e = do
             nxt <- (Just <$> lookAhead anyChar <|> return Nothing)
@@ -663,6 +672,12 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> parens' expr <|> notExpr <|> ne
 
     antiExpr  = AntiExpr <$> do
          x <- (try (symbol "`(") >> anyChar `manyTill` try (string ")`"))
+         either (fail . ("Bad AntiQuotation: \n" ++))
+                (const (return x))
+                (parseHSExp x)
+
+    antiExprSimple  = AntiExpr <$> do
+         x <- (symbol "`" >> anyChar `manyTill` string "`")
          either (fail . ("Bad AntiQuotation: \n" ++))
                 (const (return x))
                 (parseHSExp x)

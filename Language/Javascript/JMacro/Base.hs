@@ -14,7 +14,7 @@ Simple DSL for lightweight (untyped) programmatic generation of Javascript.
 
 module Language.Javascript.JMacro.Base (
   -- * ADT
-  JStat(..), JExpr(..), JVal(..), Ident(..), IdentSupply(..),
+  JStat(..), JExpr(..), JVal(..), Ident(..), IdentSupply(..), JsLabel,
   -- * Generic traversal (via compos)
   JMacro(..), JMGadt(..), Compos(..),
   composOp, composOpM, composOpM_, composOpFold,
@@ -208,14 +208,14 @@ instance JMacro JStat where
     jtoGADT = JMGStat
     jfromGADT (JMGStat x) = x
     jfromGADT _ = error "impossible"
-    
+
 instance JMacro JExpr where
     jtoGADT = JMGExpr
     jfromGADT (JMGExpr x) = x
     jfromGADT _ = error "impossible"
 
 instance JMacro JVal where
-    jtoGADT = JMGVal 
+    jtoGADT = JMGVal
     jfromGADT (JMGVal x) = x
     jfromGADT _ = error "impossible"
 
@@ -245,7 +245,7 @@ instance Compos JMGadt where
     compos = jmcompos
 
 jmcompos :: forall m c. (forall a. a -> m a) -> (forall a b. m (a -> b) -> m a -> m b) -> (forall a. JMGadt a -> m (JMGadt a)) -> JMGadt c -> m (JMGadt c)
-jmcompos ret app f' v = 
+jmcompos ret app f' v =
     case v of
      JMGId _ -> ret v
      JMGStat v' -> ret JMGStat `app` case v' of
@@ -340,7 +340,7 @@ jsSaturate str x = evalState (runIdentSupply $ jsSaturate_ x) (newIdentSupply st
 
 jsSaturate_ :: (JMacro a) => a -> IdentSupply a
 jsSaturate_ e = IS $ jfromGADT <$> go (jtoGADT e)
-    where 
+    where
       go :: forall a. JMGadt a -> State [Ident] (JMGadt a)
       go v = case v of
                JMGStat (UnsatBlock us) -> go =<< (JMGStat <$> runIdentSupply us)
@@ -355,8 +355,8 @@ jsSaturate_ e = IS $ jfromGADT <$> go (jtoGADT e)
 --doesn't apply to unsaturated bits
 jsReplace_ :: JMacro a => [(Ident, Ident)] -> a -> a
 jsReplace_ xs e = jfromGADT $ go (jtoGADT e)
-    where 
-      go :: forall a. JMGadt a -> JMGadt a    
+    where
+      go :: forall a. JMGadt a -> JMGadt a
       go v = case v of
                    JMGId i -> maybe v JMGId (M.lookup i mp)
                    _ -> composOp go v
