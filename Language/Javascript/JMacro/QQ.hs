@@ -437,7 +437,7 @@ statement = declStat
           return [ForeignStat i t]
 
       returnStat =
-        reserved "return" >> (:[]) . ReturnStat <$> option (ValExpr $ JVar $ StrI "null") expr
+        reserved "return" >> (:[]) . ReturnStat <$> option (ValExpr $ JVar $ StrI "undefined") expr
 
       ifStat = do
         reserved "if"
@@ -519,6 +519,7 @@ statement = declStat
           (e1,op) <- try $ liftM2 (,) dotExpr (fmap (take 1) $
                                                    rop "="
                                                <|> rop "+="
+                                               <|> rop "-="
                                                <|> rop "*="
                                                <|> rop "/="
                                                <|> rop "%="
@@ -529,10 +530,10 @@ statement = declStat
                                                <|> rop "^="
                                                <|> rop "|="
                                               )
-          let gofail = fail ("Invalid assignment.")
+          let gofail  = fail ("Invalid assignment.")
+              badList = ["this","true","false","undefined","null"]
           case e1 of
-            ValExpr (JVar (StrI "this")) -> gofail
-            ValExpr (JVar _) -> return ()
+            ValExpr (JVar (StrI s)) -> if s `elem` badList then gofail else return ()
             ApplExpr _ _ -> gofail
             ValExpr _ -> gofail
             _ -> return ()

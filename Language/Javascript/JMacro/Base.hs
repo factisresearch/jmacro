@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables, GADTs #-}
+{-# LANGUAGE FlexibleInstances, UndecidableInstances, OverlappingInstances, OverloadedStrings, TypeFamilies, RankNTypes, DeriveDataTypeable, StandaloneDeriving, FlexibleContexts, TypeSynonymInstances, ScopedTypeVariables, GADTs, GeneralizedNewtypeDeriving #-}
 
 -----------------------------------------------------------------------------
 {- |
@@ -160,7 +160,7 @@ data JExpr = ValExpr    JVal
 -- | Values
 data JVal = JVar     Ident
           | JList    [JExpr]
-          | JDouble  Double
+          | JDouble  SaneDouble
           | JInt     Integer
           | JStr     String
           | JRegEx   String
@@ -168,6 +168,19 @@ data JVal = JVar     Ident
           | JFunc    [Ident] JStat
           | UnsatVal (IdentSupply JVal)
             deriving (Eq, Ord, Show, Data, Typeable)
+
+newtype SaneDouble = SaneDouble Double deriving (Data, Typeable, Fractional, Num)
+
+instance Eq SaneDouble where
+    (SaneDouble x) == (SaneDouble y) = x == y || (isNaN x && isNaN y)
+
+instance Ord SaneDouble where
+    compare (SaneDouble x) (SaneDouble y) = compare (fromNaN x) (fromNaN y)
+        where fromNaN z | isNaN z = Nothing
+                        | otherwise = Just z
+
+instance Show SaneDouble where
+    show (SaneDouble x) = show x
 
 -- | Identifiers
 newtype Ident = StrI String deriving (Eq, Ord, Show, Data, Typeable)
@@ -522,7 +535,7 @@ instance JsToDoc JExpr where
 instance JsToDoc JVal where
     jsToDoc (JVar i) = jsToDoc i
     jsToDoc (JList xs) = brackets . fillSep . punctuate comma $ map jsToDoc xs
-    jsToDoc (JDouble d) = double d
+    jsToDoc (JDouble (SaneDouble d)) = double d
     jsToDoc (JInt i) = integer i
     jsToDoc (JStr s) = text . T.pack $ "\""++encodeJson s++"\""
     jsToDoc (JRegEx s) = text . T.pack $ "/"++s++"/"
@@ -615,7 +628,7 @@ instance ToJExpr a => ToJExpr (M.Map String a) where
     toJExpr = ValExpr . JHash . M.map toJExpr
 
 instance ToJExpr Double where
-    toJExpr = ValExpr . JDouble
+    toJExpr = ValExpr . JDouble . SaneDouble
 
 instance ToJExpr Int where
     toJExpr = ValExpr . JInt . fromIntegral
