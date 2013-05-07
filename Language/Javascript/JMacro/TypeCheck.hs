@@ -28,9 +28,9 @@ import Text.PrettyPrint.Leijen.Text hiding ((<$>))
 
 -- Utility
 
-isLeft :: Either a b -> Bool
-isLeft (Left _) = True
-isLeft _ = False
+eitherIsLeft :: Either a b -> Bool
+eitherIsLeft (Left _) = True
+eitherIsLeft _ = False
 
 partitionOut :: (a -> Maybe b) -> [a] -> ([b],[a])
 partitionOut f xs' = foldr go ([],[]) xs'
@@ -581,13 +581,13 @@ tryCloseFrozenVars = runReaderT (loop . tc_frozen =<< get) []
 
       findLoop i cs@(c:_) = go [] cs
           where
-            cTyp = isLeft c
+            cTyp = eitherIsLeft c
             go accum (r:rs)
-               | either id id r == i && isLeft r == cTyp = Just $ Just (either id id r : accum)
+               | either id id r == i && eitherIsLeft r == cTyp = Just $ Just (either id id r : accum)
                   -- i.e. there's a cycle to close
                | either id id r == i = Just Nothing
                   -- i.e. there's a "dull" cycle
-               | isLeft r /= cTyp = Nothing -- we stop looking for a cycle because the chain is broken
+               | eitherIsLeft r /= cTyp = Nothing -- we stop looking for a cycle because the chain is broken
                | otherwise = go (either id id r : accum) rs
             go _ [] = Nothing
 
