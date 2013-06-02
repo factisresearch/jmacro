@@ -385,19 +385,31 @@ jsUnsat_ xs e = IS $ do
 -- | Apply a transformation to a fully saturated syntax tree,
 -- taking care to return any free variables back to their free state
 -- following the transformation. As the transformation preserves
--- free variables, it is hygienic. Cannot be used nested.
-withHygiene:: JMacro a => (a -> a) -> a -> a
-withHygiene f x = jfromGADT $ case mx of
-              JMGStat _  -> jtoGADT $ UnsatBlock (jsUnsat_ is' x'')
-              JMGExpr _  -> jtoGADT $ UnsatExpr  (jsUnsat_ is' x'')
-              JMGVal  _  -> jtoGADT $ UnsatVal   (jsUnsat_ is' x'')
-              JMGId _ -> jtoGADT $ f x
-    where (x', (StrI l:_)) = runState (runIdentSupply $ jsSaturate_ x) is
-          x'' = f x'
-          is = newIdentSupply (Just "inSat")
-          lastVal = readNote "inSat" (drop 6 l) :: Int
-          is' = take lastVal is
-          mx = jtoGADT x
+-- free variables, it is hygienic.
+withHygiene ::  JMacro a => (a -> a) -> a -> a
+withHygiene f x = jfromGADT $ case jtoGADT x of
+    JMGExpr z -> JMGExpr $ UnsatExpr $ inScope z
+    JMGStat z -> JMGStat $ UnsatBlock $ inScope z
+    JMGVal  z -> JMGVal $ UnsatVal $ inScope z
+    JMGId _ -> jtoGADT $ f x
+    where
+        inScope z = IS $ do
+            ([StrI a], b) <- splitAt 1 `fmap` get
+            put b
+            return $ withHygiene_ a f z
+
+withHygiene_ :: JMacro a => String -> (a -> a) -> a -> a
+withHygiene_ un f x = jfromGADT $ case jtoGADT x of
+    JMGStat _ -> jtoGADT $ UnsatBlock (jsUnsat_ is' x'')
+    JMGExpr _ -> jtoGADT $ UnsatExpr (jsUnsat_ is' x'')
+    JMGVal  _ -> jtoGADT $ UnsatVal (jsUnsat_ is' x'')
+    JMGId _ -> jtoGADT $ f x
+    where
+        (x', (StrI l : _)) = runState (runIdentSupply $ jsSaturate_ x) is 
+        is' = take lastVal is
+        x'' = f x'
+        lastVal = readNote ("inSat" ++ un) (reverse . takeWhile (/= '_') . reverse $ l) :: Int
+        is = newIdentSupply $ Just ("inSat" ++ un)
 
 -- | Takes a fully saturated expression and transforms it to use unique variables that respect scope.
 scopify :: JStat -> JStat
