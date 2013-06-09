@@ -18,11 +18,11 @@ usage:
 
 The above produces the id function at the top level.
 
-> renderJs [$jmacro|var id = \x -> x|]
+> renderJs [$jmacro|var id = \x -> x;|]
 
 So does the above here. However, as id is brought into scope by the keyword var, you do not get a variable named id in the generated javascript, but a variable with an arbitrary unique identifier.
 
-> renderJs [$jmacro|var !id = \x -> x|]
+> renderJs [$jmacro|var !id = \x -> x;|]
 
 The above, by using the bang special form in a var declaration, produces a variable that really is named id.
 
