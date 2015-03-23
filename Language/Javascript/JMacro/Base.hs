@@ -405,7 +405,7 @@ withHygiene_ un f x = jfromGADT $ case jtoGADT x of
     JMGVal  _ -> jtoGADT $ UnsatVal (jsUnsat_ is' x'')
     JMGId _ -> jtoGADT $ f x
     where
-        (x', (StrI l : _)) = runState (runIdentSupply $ jsSaturate_ x) is 
+        (x', (StrI l : _)) = runState (runIdentSupply $ jsSaturate_ x) is
         is' = take lastVal is
         x'' = f x'
         lastVal = readNote ("inSat" ++ un) (reverse . takeWhile (/= '_') . reverse $ l) :: Int
@@ -653,6 +653,13 @@ instance ToJExpr Char where
     toJExprFromList = ValExpr . JStr
 --        where escQuotes = tailDef "" . initDef "" . show
 
+instance ToJExpr TS.Text where
+    toJExpr t = toJExpr (TS.unpack t)
+
+instance ToJExpr T.Text where
+    toJExpr t = toJExpr (T.unpack t)
+
+
 instance (ToJExpr a, ToJExpr b) => ToJExpr (a,b) where
     toJExpr (a,b) = ValExpr . JList $ [toJExpr a, toJExpr b]
 
@@ -809,4 +816,3 @@ encodeJsonChar c
     | c < '\x1000' = '\\' : 'u' : '0' : hexxs
     where hexxs = showHex (fromEnum c) "" -- FIXME
 encodeJsonChar c = [c]
-
