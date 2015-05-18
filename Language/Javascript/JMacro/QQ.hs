@@ -14,7 +14,7 @@ Simple EDSL for lightweight (untyped) programmatic generation of Javascript.
 
 module Language.Javascript.JMacro.QQ(jmacro,jmacroE,parseJM,parseJME) where
 import Prelude hiding (tail, init, head, last, minimum, maximum, foldr1, foldl1, (!!), read)
-import Control.Applicative hiding ((<|>),many,optional,(<*))
+import Control.Applicative hiding ((<|>),many,optional)
 import Control.Arrow(first)
 import Control.Monad.State.Strict
 import Data.Char(digitToInt, toLower, isUpper)
@@ -105,12 +105,13 @@ antiIdents :: JMacro a => [String] -> a -> a
 antiIdents ss x = foldr antiIdent x ss
 
 fixIdent :: String -> String
+fixIdent "_" = "_x_"
 fixIdent css@(c:_)
     | isUpper c = '_' : escapeDollar css
     | otherwise = escapeDollar css
   where
     escapeDollar = map (\x -> if x =='$' then 'ǆ' else x)
-fixIdent _ = "_"
+fixIdent _ = "_x_"
 
 
 jm2th :: Data a => a -> TH.ExpQ
@@ -260,8 +261,8 @@ commaSep  = P.commaSep  lexer
 lexeme :: JMParser a -> JMParser a
 lexeme    = P.lexeme lexer
 
-(<*) :: Monad m => m b -> m a -> m b
-x <* y = do
+(<<*) :: Monad m => m b -> m a -> m b
+x <<* y = do
   xr <- x
   _ <- y
   return xr
@@ -432,7 +433,7 @@ statement = declStat
 
       foreignStat = do
           reserved "foreign"
-          i <- try $ identdecl <* reservedOp "::"
+          i <- try $ identdecl <<* reservedOp "::"
           t <- runTypeParser
           return [ForeignStat i t]
 
@@ -507,12 +508,14 @@ statement = declStat
         b <- statement
         return $ jFor' before after p b
           where threeStat =
-                    liftM3 (,,) (option [] statement <* optional semi)
-                                (optionMaybe expr <* semi)
+                    liftM3 (,,) (option [] statement <<* optional semi)
+                                (optionMaybe expr <<* semi)
                                 (option [] statement)
                 jFor' :: [JStat] -> Maybe JExpr -> [JStat]-> [JStat] -> [JStat]
-                jFor' before p after bs = before ++ [WhileStat False (fromMaybe (jsv "true") p) b']
-                    where b' = BlockStat $ bs ++ after
+                jFor' before p after bs = decl ++ before ++ [WhileStat False (fromMaybe (jsv "true") p) b']
+                    where b' = BlockStat $ maybeAfter : bs
+                          maybeAfter = IfStat (InfixExpr "==" (jsv "jmId_loop") (jsv "true")) (BlockStat after) (AssignStat (jsv "jmId_loop") (jsv "true"))
+                          decl = [DeclStat (StrI "jmId_loop") Nothing, AssignStat (jsv "jmId_loop") (jsv "false")]
 
       assignOpStat = do
           let rop x = reservedOp x >> return x
@@ -568,7 +571,7 @@ statement = declStat
 
       labelStat = do
         lbl <- try $ do
-                    l <- myIdent <* char ':'
+                    l <- myIdent <<* char ':'
                     guard (l /= "default")
                     return l
         s <- l2s <$> statblock0
@@ -702,19 +705,19 @@ dotExprOne = addNxt =<< valExpr <|> antiExpr <|> antiExprSimple <|> parens' expr
               statOrEblock  = try (ReturnStat <$> expr `folBy` '}') <|> (l2s <$> statblock)
               propPair = liftM2 (,) myIdent (colon >> expr)
 
---notFolBy a b = a <* notFollowedBy (char b)
+--notFolBy a b = a <<* notFollowedBy (char b)
 folBy :: JMParser a -> Char -> JMParser a
-folBy a b = a <* (lookAhead (char b) >>= const (return ()))
+folBy a b = a <<* (lookAhead (char b) >>= const (return ()))
 
 --Parsers without Lexeme
 braces', brackets', parens', oxfordBraces :: JMParser a -> JMParser a
 brackets' = around' '[' ']'
 braces' = around' '{' '}'
 parens' = around' '(' ')'
-oxfordBraces x = lexeme (reservedOp "{|") >> (lexeme x <* reservedOp "|}")
+oxfordBraces x = lexeme (reservedOp "{|") >> (lexeme x <<* reservedOp "|}")
 
 around' :: Char -> Char -> JMParser a -> JMParser a
-around' a b x = lexeme (char a) >> (lexeme x <* char b)
+around' a b x = lexeme (char a) >> (lexeme x <<* char b)
 
 myIdent :: JMParser String
 myIdent = lexeme $ many1 (alphaNum <|> oneOf "_-!@#$%^&*()") <|> myStringLiteral '\''

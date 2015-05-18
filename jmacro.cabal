@@ -1,5 +1,5 @@
 name:                jmacro
-version:             0.6.11
+version:             0.6.12
 synopsis:            QuasiQuotation library for programmatic generation of Javascript code.
 description:         Javascript syntax, functional syntax, hygienic names, compile-time guarantees of syntactic correctness, limited typechecking. Additional documentation available at <http://www.haskell.org/haskellwiki/Jmacro>
 category:            Language
@@ -7,7 +7,7 @@ license:             BSD3
 license-file:        LICENSE
 author:              Gershom Bazerman
 maintainer:          gershomb@gmail.com
-Tested-With:         GHC == 7.8.4
+Tested-With:         GHC == 7.10
 Build-Type:          Simple
 Cabal-Version:       >= 1.6
 

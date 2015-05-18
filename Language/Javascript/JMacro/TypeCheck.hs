@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, FlexibleInstances, PatternGuards, RankNTypes #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, FlexibleInstances, PatternGuards, RankNTypes, FlexibleContexts #-}
 
 module Language.Javascript.JMacro.TypeCheck where
 
