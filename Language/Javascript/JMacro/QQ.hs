@@ -512,10 +512,8 @@ statement = declStat
                                 (optionMaybe expr <<* semi)
                                 (option [] statement)
                 jFor' :: [JStat] -> Maybe JExpr -> [JStat]-> [JStat] -> [JStat]
-                jFor' before p after bs = decl ++ before ++ [WhileStat False (fromMaybe (jsv "true") p) b']
-                    where b' = BlockStat $ maybeAfter : bs
-                          maybeAfter = IfStat (InfixExpr "==" (jsv "jmId_loop") (jsv "true")) (BlockStat after) (AssignStat (jsv "jmId_loop") (jsv "true"))
-                          decl = [DeclStat (StrI "jmId_loop") Nothing, AssignStat (jsv "jmId_loop") (jsv "false")]
+                jFor' before p after bs = before ++ [WhileStat False (fromMaybe (jsv "true") p) b']
+                    where b' = BlockStat $ bs ++ after
 
       assignOpStat = do
           let rop x = reservedOp x >> return x
