@@ -16,7 +16,7 @@ import Language.Javascript.JMacro.QQ
 -- | This provides a set of basic functional programming primitives, a few utility functions
 -- and, more importantly, a decent sample of idiomatic jmacro code. View the source for details.
 jmPrelude :: JStat
-jmPrelude = [$jmacro|
+jmPrelude = [jmacro|
 
     fun withHourglass f {
           document.body.style.cursor="wait";
@@ -350,4 +350,3 @@ jmPrelude = [$jmacro|
     };
 
 |]
-

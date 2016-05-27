@@ -66,7 +66,7 @@ mkConversationPage' (reapDelay,pingbackDelay,maxTimeout) conversations emptyConv
         pg (myJs newCid)
 
       myJs cid = jsCallRemote `mappend`
-                   [$jmacro|
+                   [jmacro|
                       jm_conversation_id=`(cid)`;
                       `(defRPCs (map snd rpcs))`;
                       $(\ {
@@ -120,7 +120,7 @@ defRPCs cs = mconcat $ map defIt cs
     where defIt (ConvRPC nm arity) = BlockStat [
                  DeclStat (StrI nm) Nothing
                , AssignStat (ValExpr (JVar (StrI nm)))
-                   [$jmacroE|\ -> callRemote false (document.URL.match(/[^?^#]*/)[0] + "/rpcs/" + `(nm)`) (toList arguments)|]
+                   [jmacroE|\ -> callRemote false (document.URL.match(/[^?^#]*/)[0] + "/rpcs/" + `(nm)`) (toList arguments)|]
               ]
 
 
@@ -139,7 +139,7 @@ toWebConvRPC getConv f = \req -> case runGetJSON readJSArray (snd req) of
 
 
 
-jsCallRemote = [$jmacro|
+jsCallRemote = [jmacro|
               var !jm_conversation_id = null;
               fun callRemote silentAndAsync loc args {
                    var res = null;
