@@ -134,6 +134,8 @@ data JStat = DeclStat   Ident (Maybe JLocalType)
 type JsLabel = String
 
 
+instance Semigroup JStat where
+    (<>) = mappend
 instance Monoid JStat where
     mempty = BlockStat []
     mappend (BlockStat xs) (BlockStat ys) = BlockStat $ xs ++ ys
