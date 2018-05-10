@@ -47,6 +47,7 @@ import qualified Data.Text.Lazy as T
 import qualified Data.Text as TS
 import Data.Generics
 import Data.Monoid(Monoid, mappend, mempty)
+import Data.Semigroup(Semigroup(..))
 
 import Numeric(showHex)
 import Safe
@@ -134,12 +135,16 @@ data JStat = DeclStat   Ident (Maybe JLocalType)
 type JsLabel = String
 
 
+instance Semigroup JStat where
+    (<>) (BlockStat xs) (BlockStat ys) = BlockStat $ xs ++ ys
+    (<>) (BlockStat xs) ys = BlockStat $ xs ++ [ys]
+    (<>) xs (BlockStat ys) = BlockStat $ xs : ys
+    (<>) xs ys = BlockStat [xs,ys]
+
+
 instance Monoid JStat where
     mempty = BlockStat []
-    mappend (BlockStat xs) (BlockStat ys) = BlockStat $ xs ++ ys
-    mappend (BlockStat xs) ys = BlockStat $ xs ++ [ys]
-    mappend xs (BlockStat ys) = BlockStat $ xs : ys
-    mappend xs ys = BlockStat [xs,ys]
+    mappend x y = x <> y
 
 
 -- TODO: annotate expressions with type
