@@ -86,9 +86,10 @@ instance Functor IdentSupply where
 
 takeOne :: State [Ident] Ident
 takeOne = do
-  (x:xs) <- get
-  put xs
-  return x
+  xs <- get
+  case xs of
+    (x:xs') -> put xs' >> return x
+    [] -> error "takeOne no element"
 
 newIdentSupply :: Maybe String -> [Ident]
 newIdentSupply Nothing     = newIdentSupply (Just "jmId")
@@ -399,9 +400,11 @@ withHygiene f x = jfromGADT $ case jtoGADT x of
     JMGId _ -> jtoGADT $ f x
     where
         inScope z = IS $ do
-            ([StrI a], b) <- splitAt 1 `fmap` get
-            put b
-            return $ withHygiene_ a f z
+            res <- splitAt 1 `fmap` get
+            case res of
+               ([StrI a], b) -> do
+                   put b
+                   return $ withHygiene_ a f z
 
 withHygiene_ :: JMacro a => String -> (a -> a) -> a -> a
 withHygiene_ un f x = jfromGADT $ case jtoGADT x of
@@ -428,20 +431,17 @@ scopify x = evalState (jfromGADT <$> go (jtoGADT x)) (newIdentSupply Nothing)
                                 ('!':'!':i') -> (DeclStat (StrI i') t:) <$> blocks xs
                                 ('!':i') -> (DeclStat (StrI i') t:) <$> blocks xs
                                 _ -> do
-                                  (newI:st) <- get
-                                  put st
+                                  newI <- takeOne
                                   rest <- blocks xs
                                   return $ [DeclStat newI t `mappend` jsReplace_ [(StrI i, newI)] (BlockStat rest)]
                              blocks (x':xs) = (jfromGADT <$> go (jtoGADT x')) <:> blocks xs
                              (<:>) = liftM2 (:)
                    (JMGStat (ForInStat b (StrI i) e s)) -> do
-                          (newI:st) <- get
-                          put st
+                          newI <- takeOne
                           rest <- jfromGADT <$> go (jtoGADT s)
                           return $ JMGStat . ForInStat b newI e $ jsReplace_ [(StrI i, newI)] rest
                    (JMGStat (TryStat s (StrI i) s1 s2)) -> do
-                          (newI:st) <- get
-                          put st
+                          newI <- takeOne
                           t <- jfromGADT <$> go (jtoGADT s)
                           c <- jfromGADT <$> go (jtoGADT s1)
                           f <- jfromGADT <$> go (jtoGADT s2)
