@@ -884,7 +884,7 @@ instance JTypeCheck JExpr where
 
 
     typecheck (UnsatExpr _) = undefined --saturate (avoiding creation of existing ids) then typecheck
-    typecheck (AntiExpr s) = fail $ "Antiquoted expression not provided with explicit signature: " ++ show s
+    typecheck (AntiExpr s) = throwError $ "Antiquoted expression not provided with explicit signature: " ++ show s
 
     --TODO: if we're typechecking a function, we can assign the types of the args to the given args
     typecheck (TypeExpr forceType e t)
