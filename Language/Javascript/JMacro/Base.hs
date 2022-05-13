@@ -51,7 +51,9 @@ import Data.Semigroup(Semigroup(..))
 
 import Numeric(showHex)
 import Safe
+import GHC.Exts (toList)
 import Data.Aeson
+import Data.Aeson.Key (toString)
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Text.PrettyPrint.Leijen.Text hiding ((<$>))
@@ -796,7 +798,7 @@ instance ToJExpr Value where
     toJExpr (Number n)       = ValExpr $ JDouble $ realToFrac n
     toJExpr (String s)       = ValExpr $ JStr $ TS.unpack s
     toJExpr (Array vs)       = ValExpr $ JList $ map toJExpr $ V.toList vs
-    toJExpr (Object obj)     = ValExpr $ JHash $ M.fromList $ map (TS.unpack *** toJExpr) $ HM.toList obj
+    toJExpr (Object obj)     = ValExpr $ JHash $ M.fromList $ map (toString *** toJExpr) $ toList obj
 
 -------------------------
 
